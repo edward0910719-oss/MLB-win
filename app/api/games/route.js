@@ -56,15 +56,16 @@ export async function GET() {
     const startParam = toMLBDateParam(tenDaysAgo);
     const endParam = toMLBDateParam(now);
 
-    const [teamsJson, scheduleJson, standingsJson, seasonPitchingJson, recentPitchingJson] =
+    const [teamsJson, scheduleJson, standingsJson, seasonPitchingJson, recentPitchingJson, seasonHittingJson] =
       await Promise.all([
         fetchJson(`${MLB_API}/teams?sportId=1&activeStatus=Y`),
-        fetchJson(`${MLB_API}/schedule?sportId=1&date=${etDate}&hydrate=team,probablePitcher`),
+        fetchJson(`${MLB_API}/schedule?sportId=1&date=${etDate}&hydrate=team,probablePitcher,lineups`),
         fetchJson(`${MLB_API}/standings?leagueId=103,104&season=${season}&standingsTypes=regularSeason`),
         fetchJson(`${MLB_API}/teams/stats?stats=season&group=pitching&season=${season}&sportIds=1`),
         fetchJson(
           `${MLB_API}/teams/stats?stats=byDateRange&group=pitching&season=${season}&sportIds=1&startDate=${startParam}&endDate=${endParam}`
         ),
+        fetchJson(`${MLB_API}/teams/stats?stats=season&group=hitting&season=${season}&sportIds=1`),
       ]);
 
     // ---- team identity: id -> { abbr, city, name } from live team list ----
@@ -104,6 +105,12 @@ export async function GET() {
       recentEraMap[split.team.id] = parseFloat(split.stat.era);
     }
 
+    // ---- season OPS per team, used both as a display stat and as the lineup-strength baseline: id -> ops ----
+    const teamOpsMap = {};
+    for (const split of seasonHittingJson.stats?.[0]?.splits || []) {
+      teamOpsMap[split.team.id] = parseFloat(split.stat.ops);
+    }
+
     // ---- today's games ----
     const rawGames = (scheduleJson.dates?.[0]?.games || []).filter((g) => {
       const bad = ["Postponed", "Cancelled", "Suspended"];
@@ -112,11 +119,14 @@ export async function GET() {
 
     const gameTeamIds = new Set();
     const pitcherIds = new Set();
+    const hitterIds = new Set();
     for (const g of rawGames) {
       gameTeamIds.add(g.teams.home.team.id);
       gameTeamIds.add(g.teams.away.team.id);
       if (g.teams.home.probablePitcher) pitcherIds.add(g.teams.home.probablePitcher.id);
       if (g.teams.away.probablePitcher) pitcherIds.add(g.teams.away.probablePitcher.id);
+      for (const p of g.lineups?.homePlayers || []) hitterIds.add(p.id);
+      for (const p of g.lineups?.awayPlayers || []) hitterIds.add(p.id);
     }
 
     // ---- injuries: only fetched for teams actually playing today ----
@@ -151,6 +161,29 @@ export async function GET() {
       }
     }
 
+    // ---- confirmed starting lineup hitters' season OPS, fetched in one bulk call ----
+    const hitterOpsMap = {};
+    if (hitterIds.size > 0) {
+      const hitters = await fetchJson(
+        `${MLB_API}/people?personIds=${[...hitterIds].join(",")}&hydrate=stats(group=[hitting],type=[season],season=${season})`
+      );
+      for (const person of hitters.people || []) {
+        const split = person.stats?.[0]?.splits?.[0];
+        const ops = split ? parseFloat(split.stat.ops) : NaN;
+        if (!Number.isNaN(ops)) hitterOpsMap[person.id] = ops;
+      }
+    }
+
+    // average OPS of the confirmed starting lineup; falls back to the team's season OPS
+    // when MLB hasn't posted a lineup for this game yet (typically until ~1-2 hours before first pitch)
+    function lineupOps(teamId, players) {
+      const opsValues = (players || []).map((p) => hitterOpsMap[p.id]).filter((v) => v !== undefined);
+      if (opsValues.length >= 5) {
+        return { ops: opsValues.reduce((s, v) => s + v, 0) / opsValues.length, confirmed: true };
+      }
+      return { ops: teamOpsMap[teamId] ?? 0.7, confirmed: false };
+    }
+
     // ---- assemble TEAMS (all 30 clubs, for the standings tab) ----
     const teams = Object.entries(TEAM_META).map(([idStr, meta]) => {
       const id = Number(idStr);
@@ -172,6 +205,7 @@ export async function GET() {
         last10: standing.last10,
         era,
         bp10: recentEraMap[id] ?? era,
+        ops: teamOpsMap[id] ?? 0.7,
         injuries: injuryMap[id] || [],
       };
     });
@@ -196,6 +230,8 @@ export async function GET() {
         const homeAbbr = teamIdentity[homeId]?.abbr;
         const awayAbbr = teamIdentity[awayId]?.abbr;
         if (!homeAbbr || !awayAbbr || !TEAM_META[homeId] || !TEAM_META[awayId]) return null;
+        const homeLineup = lineupOps(homeId, g.lineups?.homePlayers);
+        const awayLineup = lineupOps(awayId, g.lineups?.awayPlayers);
         return {
           gamePk: g.gamePk,
           home: homeAbbr,
@@ -204,6 +240,10 @@ export async function GET() {
           ap: buildProbablePitcher(awayId, g.teams.away.probablePitcher),
           time: etTimeString(g.gameDate),
           gameDateIso: g.gameDate,
+          homeLineupOps: homeLineup.ops,
+          awayLineupOps: awayLineup.ops,
+          homeLineupConfirmed: homeLineup.confirmed,
+          awayLineupConfirmed: awayLineup.confirmed,
         };
       })
       .filter(Boolean);
