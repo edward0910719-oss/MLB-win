@@ -174,8 +174,10 @@ function ProbBar({ homeProb, homeColor, awayColor }) {
   const homePct = Math.round(homeProb * 100);
   return (
     <div className="probbar">
-      <div className="probbar-fill" style={{ width: `${homePct}%`, background: homeColor }} />
+      {/* away is always displayed on the left (see TeamTag usage) and home on the right,
+          so the bar segments must follow the same order to line up with the team tags */}
       <div className="probbar-fill" style={{ width: `${100 - homePct}%`, background: awayColor }} />
+      <div className="probbar-fill" style={{ width: `${homePct}%`, background: homeColor }} />
     </div>
   );
 }
@@ -204,7 +206,7 @@ function GameCard({ g, onOpen, teamMap }) {
     <button className="game-card" onClick={() => onOpen(g)}>
       <div className="game-card-top">
         <span className="game-time">🕒 {g.twTime}（台灣時間）</span>
-        <span className="game-fav">預測勝方 {favored.zh} {Math.round(favPct * 100)}%</span>
+        <span className="game-fav">獨贏 {favored.zh} {Math.round(favPct * 100)}%</span>
       </div>
 
       <div className="matchup-row">
@@ -297,49 +299,69 @@ function GameDetail({ g, onClose, teamMap }) {
   );
 }
 
+const DIVISION_ORDER = ["AL East", "AL Central", "AL West", "NL East", "NL Central", "NL West"];
+
 function StandingsTable({ teams, query }) {
-  const filtered = teams
-    .filter((t) =>
-      query
-        ? t.name.toLowerCase().includes(query.toLowerCase()) ||
-          t.city.toLowerCase().includes(query.toLowerCase()) ||
-          t.id.toLowerCase().includes(query.toLowerCase()) ||
-          t.zh.includes(query)
-        : true
-    )
-    .sort((a, b) => winPct(b) - winPct(a));
+  const filtered = teams.filter((t) =>
+    query
+      ? t.name.toLowerCase().includes(query.toLowerCase()) ||
+        t.city.toLowerCase().includes(query.toLowerCase()) ||
+        t.id.toLowerCase().includes(query.toLowerCase()) ||
+        t.zh.includes(query)
+      : true
+  );
+
+  const presentDivisions = Array.from(new Set(teams.map((t) => t.div)));
+  const divisionOrder = [
+    ...DIVISION_ORDER.filter((d) => presentDivisions.includes(d)),
+    ...presentDivisions.filter((d) => !DIVISION_ORDER.includes(d)),
+  ];
+
+  const groups = divisionOrder
+    .map((div) => ({
+      div,
+      teams: filtered.filter((t) => t.div === div).sort((a, b) => winPct(b) - winPct(a)),
+    }))
+    .filter((g) => g.teams.length > 0);
+
+  if (groups.length === 0) {
+    return <p className="muted" style={{ padding: "1.4rem 2rem" }}>找不到符合條件的球隊，換個關鍵字試試。</p>;
+  }
 
   return (
     <div className="standings-wrap">
-      <table className="standings-table">
-        <thead>
-          <tr>
-            <th>球隊</th>
-            <th>分區</th>
-            <th>戰績</th>
-            <th>勝率</th>
-            <th>得失分差</th>
-            <th>近10場</th>
-            <th>先發ERA</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filtered.map((t) => (
-            <tr key={t.id}>
-              <td>
-                <span className="team-dot small" style={{ background: t.color, boxShadow: `0 0 0 2px ${t.accent} inset` }} />
-                {t.zh}
-              </td>
-              <td className="muted">{t.div}</td>
-              <td>{t.w}-{t.l}</td>
-              <td className="mono">{(winPct(t) * 100).toFixed(1)}%</td>
-              <td className={t.rs - t.ra >= 0 ? "pos" : "neg"}>{t.rs - t.ra >= 0 ? "+" : ""}{t.rs - t.ra}</td>
-              <td>{t.last10}</td>
-              <td className="mono">{t.era.toFixed(2)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {groups.map((g) => (
+        <div className="standings-group" key={g.div}>
+          <h3 className="standings-div-heading">{g.div}</h3>
+          <table className="standings-table">
+            <thead>
+              <tr>
+                <th>球隊</th>
+                <th>戰績</th>
+                <th>勝率</th>
+                <th>得失分差</th>
+                <th>近10場</th>
+                <th>先發ERA</th>
+              </tr>
+            </thead>
+            <tbody>
+              {g.teams.map((t) => (
+                <tr key={t.id}>
+                  <td>
+                    <span className="team-dot small" style={{ background: t.color, boxShadow: `0 0 0 2px ${t.accent} inset` }} />
+                    {t.zh}
+                  </td>
+                  <td>{t.w}-{t.l}</td>
+                  <td className="mono">{(winPct(t) * 100).toFixed(1)}%</td>
+                  <td className={t.rs - t.ra >= 0 ? "pos" : "neg"}>{t.rs - t.ra >= 0 ? "+" : ""}{t.rs - t.ra}</td>
+                  <td>{t.last10}</td>
+                  <td className="mono">{t.era.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
     </div>
   );
 }
@@ -721,7 +743,17 @@ export default function MLBWinPredictor() {
 
         .injury-box p { font-size: 0.82rem; margin: 0.2rem 0; color: var(--clay); }
 
-        .standings-wrap { padding: 1.4rem 2rem; max-width: 1200px; margin: 0 auto; overflow-x: auto; }
+        .standings-wrap { padding: 1.4rem 2rem; max-width: 1200px; margin: 0 auto; }
+        .standings-group { margin-bottom: 1.6rem; overflow-x: auto; }
+        .standings-group:last-child { margin-bottom: 0; }
+        .standings-div-heading {
+          font-family: 'Oswald', sans-serif;
+          text-transform: uppercase;
+          font-size: 0.9rem;
+          letter-spacing: 0.05em;
+          color: var(--clay);
+          margin: 0 0 0.5rem;
+        }
         .standings-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; }
         .standings-table th {
           font-family: 'Oswald', sans-serif;
