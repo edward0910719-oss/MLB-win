@@ -229,7 +229,7 @@ function GameCard({ g, onOpen, teamMap }) {
       </div>
 
       <div className="extra-preds">
-        <span>總分預測 <strong>{g.pred.runs.low.toFixed(1)}–{g.pred.runs.high.toFixed(1)}</strong> 分</span>
+        <span>總分預測 <strong>{Math.round(g.pred.runs.low)}–{Math.round(g.pred.runs.high)}</strong> 分</span>
         <span>{favored.zh} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong></span>
       </div>
     </button>
@@ -260,7 +260,7 @@ function GameDetail({ g, onClose, teamMap }) {
 
         <div className="stat-pill-row">
           <span className="stat-pill">
-            預測總分 <strong>{g.pred.runs.total.toFixed(1)}</strong> 分（區間 {g.pred.runs.low.toFixed(1)}–{g.pred.runs.high.toFixed(1)}）
+            預測總分 <strong>{Math.round(g.pred.runs.total)}</strong> 分（區間 {Math.round(g.pred.runs.low)}–{Math.round(g.pred.runs.high)}）
           </span>
           <span className="stat-pill">
             {(g.pred.homeProb >= 0.5 ? home.zh : away.zh)} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong>
