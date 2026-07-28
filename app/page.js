@@ -814,7 +814,7 @@ export default function MLBWinPredictor() {
 
       <div className="hero">
         <p className="hero-eyebrow">MLB Win Probability Board · Live Data</p>
-        <h1>今日賽事勝率預測</h1>
+        <h1>MLB賽事勝率預測</h1>
         <p>
           結合球季戰績、得失分差、先發投手 ERA、近況走勢與傷兵名單，即時計算每場比賽的預測勝率。
           點擊任一場比賽可展開因子拆解。
