@@ -15,6 +15,17 @@ function etDateString(date) {
   }).format(date);
 }
 
+// Which slate to show flips at 19:00 Taiwan time instead of at the natural ET-midnight
+// rollover (which lands around Taiwan noon, mid-review-window). Taiwan is ET+12h, and we
+// want the flip delayed from Taiwan-noon to Taiwan-19:00, i.e. delayed by 7 hours — so
+// evaluating the ET date 7 hours in the past reproduces exactly that delayed boundary.
+// Net effect: from the moment a day's games finish until 19:00 Taiwan time, this keeps
+// returning that same (now-final) slate for review; at 19:00 Taiwan it flips to the next
+// slate's (pre-game) predictions.
+function resolveSlateDate(now) {
+  return etDateString(new Date(now.getTime() - 7 * 60 * 60 * 1000));
+}
+
 function etTimeString(isoDate) {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: "America/New_York",
@@ -81,7 +92,7 @@ async function fetchWeatherRunFactor(venue, gameDateIso) {
 export async function GET() {
   try {
     const now = new Date();
-    const etDate = etDateString(now);
+    const etDate = resolveSlateDate(now);
     const season = etDate.slice(0, 4);
 
     const tenDaysAgo = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
@@ -365,6 +376,8 @@ export async function GET() {
           awayBullpenFatigued: fatiguedTeamIds.has(awayId),
           weatherTempF: weather.tempF,
           weatherRunFactor: weather.runFactor,
+          homeScore: typeof g.teams.home.score === "number" ? g.teams.home.score : null,
+          awayScore: typeof g.teams.away.score === "number" ? g.teams.away.score : null,
           status: {
             abstract: g.status?.abstractGameState || "Preview",
             detailed: g.status?.detailedState || "Scheduled",

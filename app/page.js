@@ -69,6 +69,24 @@ function getStablePrediction(storageKey, freshPred, shouldFreeze) {
   return freshPred;
 }
 
+// grades the (locked-in) prediction against the real final score once a game is over —
+// null fields mean "not graded yet" (game isn't final, or the score hasn't come back)
+function getGrade(g) {
+  if (!g.timing.isFinal || g.homeScore === null || g.awayScore === null) {
+    return { winCorrect: null, runsCorrect: null, actualTotal: null };
+  }
+  const predictedHomeWin = g.pred.homeProb >= 0.5;
+  const actualHomeWin = g.homeScore > g.awayScore;
+  const actualTotal = g.homeScore + g.awayScore;
+  const lowR = Math.round(g.pred.runs.low);
+  const highR = Math.round(g.pred.runs.high);
+  return {
+    winCorrect: predictedHomeWin === actualHomeWin,
+    runsCorrect: actualTotal >= lowR && actualTotal <= highR,
+    actualTotal,
+  };
+}
+
 // standard normal CDF via Abramowitz-Stegun erf approximation
 function erf(x) {
   const sign = x >= 0 ? 1 : -1;
@@ -272,6 +290,15 @@ function ProbBar({ homeProb, homeColor, awayColor }) {
   );
 }
 
+function GradeMark({ correct }) {
+  if (correct === null) return null;
+  return correct ? (
+    <span className="grade-mark grade-correct" aria-label="預測正確">✓</span>
+  ) : (
+    <span className="grade-mark grade-wrong" aria-label="預測錯誤">✗</span>
+  );
+}
+
 function TeamTag({ team, align, isHome, displayColor }) {
   const dotColor = displayColor || team.color;
   return (
@@ -291,19 +318,26 @@ function GameCard({ g, onOpen, teamMap }) {
   const awayColor = getAwayDisplayColor(home, away);
   const favored = g.pred.homeProb >= 0.5 ? home : away;
   const favPct = Math.max(g.pred.homeProb, g.pred.awayProb);
+  const grade = getGrade(g);
 
   return (
     <button className="game-card" onClick={() => onOpen(g)}>
       <div className="game-card-top">
         <span className="game-time">🕒 {g.twTime}（台灣時間）</span>
-        <span className="game-fav">獨贏 {favored.zh} {Math.round(favPct * 100)}%</span>
+        <span className="game-fav">
+          獨贏 {favored.zh} {Math.round(favPct * 100)}% <GradeMark correct={grade.winCorrect} />
+        </span>
       </div>
 
       {(g.recommended || g.timing.isLive || g.timing.isFinal) && (
         <div className="game-card-badges">
           {g.recommended && <span className="badge badge-recommend">推薦</span>}
           {g.timing.isLive && <span className="badge badge-live">（比賽進行中）</span>}
-          {g.timing.isFinal && <span className="badge badge-final">（比賽已結束）</span>}
+          {g.timing.isFinal && (
+            <span className="badge badge-final">
+              （比賽已結束）{g.homeScore !== null && ` 終場 ${g.awayScore}:${g.homeScore}`}
+            </span>
+          )}
         </div>
       )}
 
@@ -327,7 +361,9 @@ function GameCard({ g, onOpen, teamMap }) {
       </div>
 
       <div className="extra-preds">
-        <span>總分預測 <strong>{Math.round(g.pred.runs.low)}–{Math.round(g.pred.runs.high)}</strong> 分</span>
+        <span>
+          總分預測 <strong>{Math.round(g.pred.runs.low)}–{Math.round(g.pred.runs.high)}</strong> 分 <GradeMark correct={grade.runsCorrect} />
+        </span>
         <span>{favored.zh} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong></span>
         <span>{parkWeatherNote(g.pred)}</span>
       </div>
@@ -339,6 +375,7 @@ function GameDetail({ g, onClose, teamMap }) {
   const home = teamMap[g.home];
   const away = teamMap[g.away];
   const awayColor = getAwayDisplayColor(home, away);
+  const grade = getGrade(g);
   return (
     <div className="detail-overlay" onClick={onClose}>
       <div className="detail-panel" onClick={(e) => e.stopPropagation()}>
@@ -355,7 +392,11 @@ function GameDetail({ g, onClose, teamMap }) {
           <div className="game-card-badges" style={{ marginBottom: "0.8rem" }}>
             {g.recommended && <span className="badge badge-recommend">推薦</span>}
             {g.timing.isLive && <span className="badge badge-live">（比賽進行中）</span>}
-            {g.timing.isFinal && <span className="badge badge-final">（比賽已結束）</span>}
+            {g.timing.isFinal && (
+              <span className="badge badge-final">
+                （比賽已結束）{g.homeScore !== null && ` 終場 ${g.awayScore}:${g.homeScore}`}
+              </span>
+            )}
           </div>
         )}
 
@@ -367,10 +408,10 @@ function GameDetail({ g, onClose, teamMap }) {
 
         <div className="stat-pill-row">
           <span className="stat-pill">
-            預測總分 <strong>{Math.round(g.pred.runs.total)}</strong> 分（區間 {Math.round(g.pred.runs.low)}–{Math.round(g.pred.runs.high)}）
+            預測總分 <strong>{Math.round(g.pred.runs.total)}</strong> 分（區間 {Math.round(g.pred.runs.low)}–{Math.round(g.pred.runs.high)}） <GradeMark correct={grade.runsCorrect} />
           </span>
           <span className="stat-pill">
-            {(g.pred.homeProb >= 0.5 ? home.zh : away.zh)} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong>
+            {(g.pred.homeProb >= 0.5 ? home.zh : away.zh)} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong> <GradeMark correct={grade.winCorrect} />
           </span>
           <span className="stat-pill">{parkWeatherNote(g.pred)}</span>
         </div>
@@ -737,6 +778,10 @@ export default function MLBWinPredictor() {
         .badge-final { background: var(--line); color: var(--muted); }
         .game-fav { color: var(--clay); font-weight: 700; }
 
+        .grade-mark { font-weight: 700; margin-left: 0.15rem; }
+        .grade-correct { color: #1B7A43; }
+        .grade-wrong { color: #B3261E; }
+
         .matchup-row {
           display: flex;
           align-items: center;
@@ -1020,6 +1065,8 @@ export default function MLBWinPredictor() {
             賽程、球隊戰績與先發投手數據即時取自 MLB 官方 Stats API（statsapi.mlb.com），約每 90 秒更新一次；
             牛棚近況以球隊近10日整體投手 ERA 概估，傷兵名單取自 40 人名單狀態。
             預測勝率為本站以上述數據推算的模型結果，僅供參考，非官方數據亦非投注建議。
+            每場比賽開打前5分鐘預測會鎖定不再變動；比賽結束後至台灣時間晚上7點前，會用 ✓／✗ 標示該場預測是否命中，
+            晚上7點後才會切換顯示隔天賽事的預測。
             Data provided by MLB Advanced Media, L.P.
           </p>
 
