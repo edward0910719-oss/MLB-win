@@ -105,7 +105,7 @@ export async function GET() {
     const [teamsJson, scheduleJson, standingsJson, seasonPitchingJson, recentPitchingJson, seasonHittingJson, recentGamesJson] =
       await Promise.all([
         fetchJson(`${MLB_API}/teams?sportId=1&activeStatus=Y`),
-        fetchJson(`${MLB_API}/schedule?sportId=1&date=${etDate}&hydrate=team,probablePitcher,lineups`),
+        fetchJson(`${MLB_API}/schedule?sportId=1&date=${etDate}&hydrate=team,probablePitcher,lineups,linescore`),
         fetchJson(`${MLB_API}/standings?leagueId=103,104&season=${season}&standingsTypes=regularSeason`),
         fetchJson(`${MLB_API}/teams/stats?stats=season&group=pitching&season=${season}&sportIds=1`),
         fetchJson(
@@ -378,6 +378,10 @@ export async function GET() {
           weatherRunFactor: weather.runFactor,
           homeScore: typeof g.teams.home.score === "number" ? g.teams.home.score : null,
           awayScore: typeof g.teams.away.score === "number" ? g.teams.away.score : null,
+          liveInning:
+            g.status?.abstractGameState === "Live" && g.linescore?.currentInning
+              ? { number: g.linescore.currentInning, half: g.linescore.inningState || null }
+              : null,
           status: {
             abstract: g.status?.abstractGameState || "Preview",
             detailed: g.status?.detailedState || "Scheduled",

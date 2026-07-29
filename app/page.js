@@ -30,6 +30,18 @@ function toTaiwanTime(gameDateIso) {
   return `${dateLabel} ${timeLabel}`;
 }
 
+const INNING_HALF_ZH = { Top: "上", Bottom: "下", Middle: "中", End: "末" };
+
+function liveStatusLabel(g) {
+  const parts = ["（比賽進行中）"];
+  if (g.homeScore !== null && g.awayScore !== null) parts.push(`${g.awayScore}:${g.homeScore}`);
+  if (g.liveInning) {
+    const half = INNING_HALF_ZH[g.liveInning.half] || "";
+    parts.push(`${g.liveInning.number}局${half}`);
+  }
+  return parts.join(" ");
+}
+
 // last-refresh timestamp, Taiwan time, down to the second
 function toTaiwanClock(iso) {
   return new Date(iso).toLocaleTimeString("zh-TW", {
@@ -323,7 +335,7 @@ function GameCard({ g, onOpen, teamMap }) {
       {(g.recommended || g.timing.isLive || g.timing.isFinal) && (
         <div className="game-card-badges">
           {g.recommended && <span className="badge badge-recommend">推薦</span>}
-          {g.timing.isLive && <span className="badge badge-live">（比賽進行中）</span>}
+          {g.timing.isLive && <span className="badge badge-live">{liveStatusLabel(g)}</span>}
           {g.timing.isFinal && (
             <span className="badge badge-final">
               （比賽已結束）{g.homeScore !== null && ` 終場 ${g.awayScore}:${g.homeScore}`}
@@ -384,7 +396,7 @@ function GameDetail({ g, onClose, teamMap }) {
         {(g.recommended || g.timing.isLive || g.timing.isFinal) && (
           <div className="game-card-badges" style={{ marginBottom: "0.8rem" }}>
             {g.recommended && <span className="badge badge-recommend">推薦</span>}
-            {g.timing.isLive && <span className="badge badge-live">（比賽進行中）</span>}
+            {g.timing.isLive && <span className="badge badge-live">{liveStatusLabel(g)}</span>}
             {g.timing.isFinal && (
               <span className="badge badge-final">
                 （比賽已結束）{g.homeScore !== null && ` 終場 ${g.awayScore}:${g.homeScore}`}
