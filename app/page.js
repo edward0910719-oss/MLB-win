@@ -128,15 +128,6 @@ function runDiffPerGame(t) {
   return (t.rs - t.ra) / (t.w + t.l);
 }
 
-function parkWeatherNote(pred) {
-  const parts = [`球場因素 ${pred.parkFactor}`];
-  if (pred.weatherTempF !== null && pred.weatherTempF !== undefined) {
-    const celsius = Math.round(((pred.weatherTempF - 32) * 5) / 9);
-    parts.push(`預估氣溫 ${celsius}°C`);
-  }
-  return parts.join(" ・ ");
-}
-
 // ---- prediction model ----
 // weighted logistic blend of: season win%, run-diff/game, starter ERA edge,
 // recent team pitching form, lineup strength, home-field bump, and penalties for
@@ -257,12 +248,15 @@ function predictGame(g, teamMap, leagueAvgEra) {
             ? `${g.homeBullpenFatigued ? home.id + " 近2日曾打延長賽" : home.id + " 正常"} / ${g.awayBullpenFatigued ? away.id + " 近2日曾打延長賽" : away.id + " 正常"}`
             : "雙方近2日皆無延長賽",
       },
+      // park + weather affect the run environment for both teams equally (they influence
+      // the total-runs number, not who's favored), so they're shown here with no lean
+      { label: "球場因素", value: 0, note: `${home.id} 主場 ${home.parkFactor}（100為中性，數字越高對打者越有利）` },
+      {
+        label: "預估氣溫",
+        value: 0,
+        note: g.weatherTempF !== null ? `${Math.round(((g.weatherTempF - 32) * 5) / 9)}°C` : "室內球場或無預報資料",
+      },
     ],
-    // park + weather affect the run environment for both teams equally, so they don't
-    // belong in the win-probability factor list above (which is about who's favored) —
-    // shown separately alongside the total-runs prediction instead
-    parkFactor: home.parkFactor,
-    weatherTempF: g.weatherTempF,
   };
 }
 
@@ -324,9 +318,6 @@ function GameCard({ g, onOpen, teamMap }) {
     <button className="game-card" onClick={() => onOpen(g)}>
       <div className="game-card-top">
         <span className="game-time">🕒 {g.twTime}（台灣時間）</span>
-        <span className="game-fav">
-          獨贏 {favored.zh} {Math.round(favPct * 100)}% <GradeMark correct={grade.winCorrect} />
-        </span>
       </div>
 
       {(g.recommended || g.timing.isLive || g.timing.isFinal) && (
@@ -361,11 +352,13 @@ function GameCard({ g, onOpen, teamMap }) {
       </div>
 
       <div className="extra-preds">
+        <span className="game-fav">
+          獨贏 {favored.zh} {Math.round(favPct * 100)}% <GradeMark correct={grade.winCorrect} />
+        </span>
         <span>
           總分預測 <strong>{Math.round(g.pred.runs.low)}–{Math.round(g.pred.runs.high)}</strong> 分 <GradeMark correct={grade.runsCorrect} />
         </span>
         <span>{favored.zh} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong></span>
-        <span>{parkWeatherNote(g.pred)}</span>
       </div>
     </button>
   );
@@ -413,7 +406,6 @@ function GameDetail({ g, onClose, teamMap }) {
           <span className="stat-pill">
             {(g.pred.homeProb >= 0.5 ? home.zh : away.zh)} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong> <GradeMark correct={grade.winCorrect} />
           </span>
-          <span className="stat-pill">{parkWeatherNote(g.pred)}</span>
         </div>
 
         <h4 className="factor-heading">預測因子拆解</h4>
