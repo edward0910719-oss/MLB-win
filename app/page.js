@@ -310,12 +310,30 @@ function TeamTag({ team, align, isHome, displayColor }) {
 
 // scoreboard-style matchup shown only while a game is live: team name + big centered
 // score, inning in the middle, and whichever of "打者"/"投手" applies to each side
+function formatAtBatLabel(atBat, isBatting) {
+  if (isBatting) {
+    const extras = [];
+    if (atBat.battingOrder) extras.push(`${atBat.battingOrder}棒`);
+    if (atBat.batterAvg) extras.push(atBat.batterAvg);
+    return `打者 ${atBat.batter}${extras.length ? `（${extras.join(" ")}）` : ""}`;
+  }
+  return `投手 ${atBat.pitcher}${atBat.pitcherEra ? `（${atBat.pitcherEra} ERA）` : ""}`;
+}
+
 function LiveMatchup({ g, home, away, awayColor }) {
   const half = INNING_HALF_ZH[g.liveInning?.half] || "";
   const awayLabel =
-    g.liveAtBat?.battingSide === "away" ? `打者 ${g.liveAtBat.batter}` : g.liveAtBat?.battingSide === "home" ? `投手 ${g.liveAtBat.pitcher}` : null;
+    g.liveAtBat?.battingSide === "away"
+      ? formatAtBatLabel(g.liveAtBat, true)
+      : g.liveAtBat?.battingSide === "home"
+        ? formatAtBatLabel(g.liveAtBat, false)
+        : null;
   const homeLabel =
-    g.liveAtBat?.battingSide === "home" ? `打者 ${g.liveAtBat.batter}` : g.liveAtBat?.battingSide === "away" ? `投手 ${g.liveAtBat.pitcher}` : null;
+    g.liveAtBat?.battingSide === "home"
+      ? formatAtBatLabel(g.liveAtBat, true)
+      : g.liveAtBat?.battingSide === "away"
+        ? formatAtBatLabel(g.liveAtBat, false)
+        : null;
 
   return (
     <div className="live-matchup">

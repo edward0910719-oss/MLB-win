@@ -350,6 +350,37 @@ export async function GET() {
       };
     }
 
+    // ---- current batter's AVG / current pitcher's ERA for live games — these can be
+    // substitutes not in the pre-game lineup/probable-pitcher, so they need their own
+    // lookup rather than reusing hitterOpsMap/pitcherStatsMap ----
+    const liveBatterIds = new Set();
+    const livePitcherIds = new Set();
+    for (const g of rawGames) {
+      if (g.status?.abstractGameState !== "Live") continue;
+      if (g.linescore?.offense?.batter?.id) liveBatterIds.add(g.linescore.offense.batter.id);
+      if (g.linescore?.defense?.pitcher?.id) livePitcherIds.add(g.linescore.defense.pitcher.id);
+    }
+    const liveBatterAvgMap = {};
+    const livePitcherEraMap = {};
+    const [liveBattersJson, livePitchersJson] = await Promise.all([
+      liveBatterIds.size > 0
+        ? fetchJson(
+            `${MLB_API}/people?personIds=${[...liveBatterIds].join(",")}&hydrate=stats(group=[hitting],type=[season],season=${season})`
+          )
+        : Promise.resolve({ people: [] }),
+      livePitcherIds.size > 0
+        ? fetchJson(
+            `${MLB_API}/people?personIds=${[...livePitcherIds].join(",")}&hydrate=stats(group=[pitching],type=[season],season=${season})`
+          )
+        : Promise.resolve({ people: [] }),
+    ]);
+    for (const person of liveBattersJson.people || []) {
+      liveBatterAvgMap[person.id] = person.stats?.[0]?.splits?.[0]?.stat?.avg ?? null;
+    }
+    for (const person of livePitchersJson.people || []) {
+      livePitcherEraMap[person.id] = person.stats?.[0]?.splits?.[0]?.stat?.era ?? null;
+    }
+
     const games = rawGames
       .map((g) => {
         const homeId = g.teams.home.team.id;
@@ -387,7 +418,10 @@ export async function GET() {
               ? {
                   battingSide: g.linescore.offense.team?.id === homeId ? "home" : "away",
                   batter: g.linescore.offense.batter?.fullName || null,
+                  battingOrder: g.linescore.offense.battingOrder ?? null,
+                  batterAvg: liveBatterAvgMap[g.linescore.offense.batter?.id] ?? null,
                   pitcher: g.linescore.defense?.pitcher?.fullName || null,
+                  pitcherEra: livePitcherEraMap[g.linescore.defense?.pitcher?.id] ?? null,
                 }
               : null,
           status: {
