@@ -244,6 +244,10 @@ export async function GET() {
           awayLineupOps: awayLineup.ops,
           homeLineupConfirmed: homeLineup.confirmed,
           awayLineupConfirmed: awayLineup.confirmed,
+          status: {
+            abstract: g.status?.abstractGameState || "Preview",
+            detailed: g.status?.detailedState || "Scheduled",
+          },
         };
       })
       .filter(Boolean);

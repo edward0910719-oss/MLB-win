@@ -30,6 +30,45 @@ function toTaiwanTime(gameDateIso) {
   return `${dateLabel} ${timeLabel}`;
 }
 
+// last-refresh timestamp, Taiwan time, down to the second
+function toTaiwanClock(iso) {
+  return new Date(iso).toLocaleTimeString("zh-TW", {
+    timeZone: "Asia/Taipei",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+// predictions stop updating once a game is within this many minutes of first pitch
+const PREDICTION_LOCK_MINUTES = 5;
+
+function getGameTiming(gameDateIso, status) {
+  const startMs = new Date(gameDateIso).getTime();
+  const lockMs = startMs - PREDICTION_LOCK_MINUTES * 60 * 1000;
+  const isLive = status?.abstract === "Live";
+  const isFinal = status?.abstract === "Final";
+  const isLocked = !isLive && !isFinal && Date.now() >= lockMs;
+  return { isLive, isFinal, isLocked, frozen: isLive || isFinal || isLocked };
+}
+
+// once a game enters its prediction-lock window, freeze whatever prediction was showing at
+// that moment in localStorage so later refreshes (new pitcher/lineup data, etc.) can't change
+// the number retroactively — there is no backend, so the browser's own storage is the only
+// place this can live
+function getStablePrediction(storageKey, freshPred, shouldFreeze) {
+  if (!shouldFreeze || typeof window === "undefined") return freshPred;
+  try {
+    const stored = window.localStorage.getItem(storageKey);
+    if (stored) return JSON.parse(stored);
+    window.localStorage.setItem(storageKey, JSON.stringify(freshPred));
+  } catch {
+    // localStorage unavailable (private browsing, quota, etc.) — just fall through to freshPred
+  }
+  return freshPred;
+}
+
 // standard normal CDF via Abramowitz-Stegun erf approximation
 function erf(x) {
   const sign = x >= 0 ? 1 : -1;
@@ -223,6 +262,14 @@ function GameCard({ g, onOpen, teamMap }) {
         <span className="game-fav">獨贏 {favored.zh} {Math.round(favPct * 100)}%</span>
       </div>
 
+      {(g.recommended || g.timing.isLive || g.timing.isFinal) && (
+        <div className="game-card-badges">
+          {g.recommended && <span className="badge badge-recommend">推薦</span>}
+          {g.timing.isLive && <span className="badge badge-live">（比賽進行中）</span>}
+          {g.timing.isFinal && <span className="badge badge-final">（比賽已結束）</span>}
+        </div>
+      )}
+
       <div className="matchup-row">
         <TeamTag team={away} align="left" isHome={false} displayColor={awayColor} />
         <span className="vs">@</span>
@@ -265,6 +312,14 @@ function GameDetail({ g, onClose, teamMap }) {
         </div>
 
         <p className="detail-time">🕒 {g.twTime}（台灣時間，原始賽程為美東 {g.time}）</p>
+
+        {(g.recommended || g.timing.isLive || g.timing.isFinal) && (
+          <div className="game-card-badges" style={{ marginBottom: "0.8rem" }}>
+            {g.recommended && <span className="badge badge-recommend">推薦</span>}
+            {g.timing.isLive && <span className="badge badge-live">（比賽進行中）</span>}
+            {g.timing.isFinal && <span className="badge badge-final">（比賽已結束）</span>}
+          </div>
+        )}
 
         <ProbBar homeProb={g.pred.homeProb} homeColor={home.color} awayColor={awayColor} />
         <div className="digits-row" style={{ marginBottom: "0.8rem" }}>
@@ -433,13 +488,26 @@ export default function MLBWinPredictor() {
 
   const GAMES = useMemo(() => {
     if (!teams.length) return [];
-    return rawGames
+    const withPred = rawGames
       .filter((g) => teamMap[g.home] && teamMap[g.away])
-      .map((g) => ({ ...g, twTime: toTaiwanTime(g.gameDateIso), pred: predictGame(g, teamMap, leagueAvgEra) }));
-  }, [rawGames, teamMap, leagueAvgEra]);
+      .map((g) => {
+        const timing = getGameTiming(g.gameDateIso, g.status);
+        const freshPred = predictGame(g, teamMap, leagueAvgEra);
+        const storageKey = `mlbpred:${data?.date}:${g.gamePk}`;
+        const pred = getStablePrediction(storageKey, freshPred, timing.frozen);
+        return { ...g, twTime: toTaiwanTime(g.gameDateIso), timing, pred, confidence: Math.abs(pred.homeProb - 0.5) };
+      });
+    const top3 = new Set(
+      [...withPred]
+        .sort((a, b) => b.confidence - a.confidence)
+        .slice(0, 3)
+        .map((g) => g.gamePk)
+    );
+    return withPred.map((g) => ({ ...g, recommended: top3.has(g.gamePk) }));
+  }, [rawGames, teamMap, leagueAvgEra, data?.date]);
 
   const filteredGames = useMemo(() => {
-    return GAMES.filter((g) => {
+    const filtered = GAMES.filter((g) => {
       const home = teamMap[g.home];
       const away = teamMap[g.away];
       const matchesQuery = query
@@ -454,6 +522,10 @@ export default function MLBWinPredictor() {
       const matchesDiv = division === "all" ? true : home.div === division || away.div === division;
       return matchesQuery && matchesDiv;
     });
+    // recommended (top-3 most confident) games lead the list; everything else keeps its original order
+    const recommended = filtered.filter((g) => g.recommended).sort((a, b) => b.confidence - a.confidence);
+    const rest = filtered.filter((g) => !g.recommended);
+    return [...recommended, ...rest];
   }, [GAMES, query, division, teamMap]);
 
   return (
@@ -610,6 +682,20 @@ export default function MLBWinPredictor() {
           text-transform: uppercase;
           letter-spacing: 0.03em;
         }
+
+        .game-card-badges { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.6rem; }
+        .badge {
+          display: inline-block;
+          font-family: 'Oswald', sans-serif;
+          font-size: 0.7rem;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          padding: 0.15rem 0.55rem;
+          border-radius: 999px;
+        }
+        .badge-recommend { background: var(--bulb); color: var(--ink); }
+        .badge-live { background: #C6011F; color: #fff; }
+        .badge-final { background: var(--line); color: var(--muted); }
         .game-fav { color: var(--clay); font-weight: 700; }
 
         .matchup-row {
@@ -834,7 +920,7 @@ export default function MLBWinPredictor() {
           點擊任一場比賽可展開因子拆解。
         </p>
         <button className="hero-refresh" onClick={loadGames} disabled={status === "loading"}>
-          {status === "loading" ? "更新中…" : `重新整理${data ? `（美東 ${data.date}）` : ""}`}
+          {status === "loading" ? "更新中…" : `重新整理${data ? `（美東 ${data.date}・更新於 ${toTaiwanClock(data.generatedAt)}）` : ""}`}
         </button>
       </div>
 
