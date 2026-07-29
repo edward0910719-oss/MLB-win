@@ -146,7 +146,10 @@ export async function GET() {
       eraMap[split.team.id] = parseFloat(split.stat.era);
     }
 
-    // ---- last-10-days team ERA per team, used as a bullpen-form proxy: id -> era ----
+    // ---- last-10-days team ERA per team: id -> era. This is the whole team's recent
+    // pitching (starters included), not an isolated bullpen number — MLB's public API
+    // doesn't expose a reliever-only split — so it's used as a "recent pitching form"
+    // signal rather than being labeled as bullpen-specific ----
     const recentEraMap = {};
     for (const split of recentPitchingJson.stats?.[0]?.splits || []) {
       recentEraMap[split.team.id] = parseFloat(split.stat.era);
@@ -177,19 +180,30 @@ export async function GET() {
     }
 
     // ---- injuries: only fetched for teams actually playing today ----
-    const injuryMap = {};
+    // keep the raw injured-player list per team (for the full display list) as well as
+    // enough info (id + position) to later work out which injuries are actually significant
+    const injuredPlayersByTeam = {};
     await Promise.all(
       [...gameTeamIds].map(async (id) => {
         try {
           const roster = await fetchJson(`${MLB_API}/teams/${id}/roster?rosterType=40Man`);
-          injuryMap[id] = (roster.roster || [])
+          injuredPlayersByTeam[id] = (roster.roster || [])
             .filter((p) => p.status?.code?.startsWith("D"))
-            .map((p) => `${p.person.fullName}（${p.status.description}）`);
+            .map((p) => ({
+              id: p.person.id,
+              name: p.person.fullName,
+              description: p.status.description,
+              isPitcher: p.position?.code === "1",
+            }));
         } catch {
-          injuryMap[id] = [];
+          injuredPlayersByTeam[id] = [];
         }
       })
     );
+    const injuryMap = {};
+    for (const [id, players] of Object.entries(injuredPlayersByTeam)) {
+      injuryMap[id] = players.map((p) => `${p.name}（${p.description}）`);
+    }
 
     // ---- probable pitcher season stats (ERA / WHIP), fetched in one bulk call ----
     const pitcherStatsMap = {};
@@ -231,6 +245,46 @@ export async function GET() {
       return { ops: teamOpsMap[teamId] ?? 0.7, confirmed: false };
     }
 
+    // ---- classify which injuries are actually significant (rotation starter / regular
+    // contributor) vs bench/depth pieces, so the injury penalty isn't just a headcount ----
+    const injuredPitcherIds = new Set();
+    const injuredHitterIds = new Set();
+    for (const players of Object.values(injuredPlayersByTeam)) {
+      for (const p of players) {
+        (p.isPitcher ? injuredPitcherIds : injuredHitterIds).add(p.id);
+      }
+    }
+    const SIGNIFICANT_GAMES_STARTED = 5; // rotation-caliber pitcher
+    const SIGNIFICANT_PLATE_APPEARANCES = 150; // regular-contributor position player
+    const gamesStartedMap = {};
+    const plateAppearancesMap = {};
+    const [injuredPitchersJson, injuredHittersJson] = await Promise.all([
+      injuredPitcherIds.size > 0
+        ? fetchJson(
+            `${MLB_API}/people?personIds=${[...injuredPitcherIds].join(",")}&hydrate=stats(group=[pitching],type=[season],season=${season})`
+          )
+        : Promise.resolve({ people: [] }),
+      injuredHitterIds.size > 0
+        ? fetchJson(
+            `${MLB_API}/people?personIds=${[...injuredHitterIds].join(",")}&hydrate=stats(group=[hitting],type=[season],season=${season})`
+          )
+        : Promise.resolve({ people: [] }),
+    ]);
+    for (const person of injuredPitchersJson.people || []) {
+      gamesStartedMap[person.id] = person.stats?.[0]?.splits?.[0]?.stat?.gamesStarted ?? 0;
+    }
+    for (const person of injuredHittersJson.people || []) {
+      plateAppearancesMap[person.id] = person.stats?.[0]?.splits?.[0]?.stat?.plateAppearances ?? 0;
+    }
+    const significantInjuryCountMap = {};
+    for (const [teamId, players] of Object.entries(injuredPlayersByTeam)) {
+      significantInjuryCountMap[teamId] = players.filter((p) =>
+        p.isPitcher
+          ? gamesStartedMap[p.id] >= SIGNIFICANT_GAMES_STARTED
+          : plateAppearancesMap[p.id] >= SIGNIFICANT_PLATE_APPEARANCES
+      ).length;
+    }
+
     // ---- weather at each home park's coordinates, around first pitch (skipped for domes) ----
     const weatherMap = {};
     await Promise.all(
@@ -268,6 +322,7 @@ export async function GET() {
         ops: teamOpsMap[id] ?? 0.7,
         parkFactor: meta.parkFactor,
         injuries: injuryMap[id] || [],
+        significantInjuryCount: significantInjuryCountMap[id] ?? 0,
       };
     });
     function buildProbablePitcher(teamId, probablePitcher) {

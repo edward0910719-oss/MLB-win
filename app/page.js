@@ -109,10 +109,6 @@ function winPct(t) {
 function runDiffPerGame(t) {
   return (t.rs - t.ra) / (t.w + t.l);
 }
-function last10Pct(t) {
-  const [w, l] = t.last10.split("-").map(Number);
-  return w / (w + l);
-}
 
 function parkWeatherNote(pred) {
   const parts = [`球場因素 ${pred.parkFactor}`];
@@ -125,24 +121,28 @@ function parkWeatherNote(pred) {
 
 // ---- prediction model ----
 // weighted logistic blend of: season win%, run-diff/game, starter ERA edge,
-// bullpen recent form, recent team form (last10), home-field bump, injury penalty
+// recent team pitching form, lineup strength, home-field bump, and penalties for
+// significant injuries / a fatigued bullpen.
+//
+// Deliberately NOT included: last-10-games win/loss record. It's one of the more
+// well-known false signals in sports analytics — 10 games is too small a sample to add
+// information beyond what's already in the season-long stats, so it was dropped rather
+// than left in as noise.
 function predictGame(g, teamMap, leagueAvgEra) {
   const home = teamMap[g.home];
   const away = teamMap[g.away];
 
-  const wWinPct = 0.30;
-  const wRunDiff = 0.18;
+  const wWinPct = 0.38;
+  const wRunDiff = 0.22;
   const wPitcher = 0.20;
   const wBullpen = 0.10;
-  const wForm = 0.12;
   const wHome = 0.06;
   const wLineup = 0.08;
 
   const winPctEdge = winPct(home) - winPct(away);
   const runDiffEdge = (runDiffPerGame(home) - runDiffPerGame(away)) / 3; // scaled
   const pitcherEdge = (g.ap.era - g.hp.era) / 3; // lower ERA is better, so away-home
-  const bullpenEdge = (away.bp10 - home.bp10) / 3; // lower bullpen ERA (last 10) is better
-  const formEdge = last10Pct(home) - last10Pct(away);
+  const bullpenEdge = (away.bp10 - home.bp10) / 3; // lower recent team ERA is better
   const homeBump = 1;
 
   // ratio of today's actual (or, if unpublished, season-average) lineup OPS to the
@@ -151,8 +151,11 @@ function predictGame(g, teamMap, leagueAvgEra) {
   const awayLineupFactor = g.awayLineupOps / (away.ops || g.awayLineupOps);
   const lineupEdge = homeLineupFactor - awayLineupFactor;
 
-  const injuryPenaltyHome = home.injuries.length * 0.03;
-  const injuryPenaltyAway = away.injuries.length * 0.03;
+  // only rotation-caliber pitchers (>=5 starts this season) and regular position players
+  // (>=150 plate appearances) count here — a stack of minor/bench IL stints shouldn't be
+  // penalized the same as losing an actual starter
+  const injuryPenaltyHome = home.significantInjuryCount * 0.08;
+  const injuryPenaltyAway = away.significantInjuryCount * 0.08;
 
   // a bullpen that threw extra innings within the last 2 days is a flat fragility penalty,
   // not scaled by weight like the other edges (same treatment as the injury penalty above)
@@ -164,7 +167,6 @@ function predictGame(g, teamMap, leagueAvgEra) {
     wRunDiff * runDiffEdge * 4 +
     wPitcher * pitcherEdge * 4 +
     wBullpen * bullpenEdge * 4 +
-    wForm * formEdge * 4 +
     wLineup * lineupEdge * 4 +
     wHome * homeBump -
     injuryPenaltyHome * 4 +
@@ -217,15 +219,18 @@ function predictGame(g, teamMap, leagueAvgEra) {
       { label: "球季戰績", value: winPctEdge, note: `${home.id} ${(winPct(home) * 100).toFixed(1)}% vs ${away.id} ${(winPct(away) * 100).toFixed(1)}%` },
       { label: "得失分差/場", value: runDiffEdge, note: `${runDiffPerGame(home).toFixed(2)} vs ${runDiffPerGame(away).toFixed(2)}` },
       { label: "先發投手 ERA", value: -pitcherEdge, note: `${g.hp.name} ${g.hp.era.toFixed(2)} vs ${g.ap.name} ${g.ap.era.toFixed(2)}` },
-      { label: "牛棚近況ERA", value: bullpenEdge, note: `${home.id} ${home.bp10.toFixed(2)} vs ${away.id} ${away.bp10.toFixed(2)}` },
-      { label: "近10場戰績", value: formEdge, note: `${home.id} ${home.last10} vs ${away.id} ${away.last10}` },
+      { label: "近況投手戰力(ERA)", value: bullpenEdge, note: `${home.id} ${home.bp10.toFixed(2)} vs ${away.id} ${away.bp10.toFixed(2)}（近10日球隊整體，非純牛棚）` },
       {
         label: "打線攻擊力(OPS)",
         value: lineupEdge,
         note: `${home.id} ${g.homeLineupOps.toFixed(3)}${g.homeLineupConfirmed ? "(先發已公布)" : "(球隊平均)"} vs ${away.id} ${g.awayLineupOps.toFixed(3)}${g.awayLineupConfirmed ? "(先發已公布)" : "(球隊平均)"}`,
       },
       { label: "主場優勢", value: homeBump * 0.06, note: "固定加成" },
-      { label: "傷兵影響", value: injuryPenaltyAway - injuryPenaltyHome, note: `${home.id}: ${home.injuries.length} 筆 / ${away.id}: ${away.injuries.length} 筆` },
+      {
+        label: "重大傷兵影響",
+        value: injuryPenaltyAway - injuryPenaltyHome,
+        note: `${home.id}: ${home.significantInjuryCount} 筆重大 / ${home.injuries.length} 筆總計・${away.id}: ${away.significantInjuryCount} 筆重大 / ${away.injuries.length} 筆總計`,
+      },
       {
         label: "牛棚疲勞",
         value: fatiguePenaltyAway - fatiguePenaltyHome,
