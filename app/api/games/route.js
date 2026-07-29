@@ -382,6 +382,14 @@ export async function GET() {
             g.status?.abstractGameState === "Live" && g.linescore?.currentInning
               ? { number: g.linescore.currentInning, half: g.linescore.inningState || null }
               : null,
+          liveAtBat:
+            g.status?.abstractGameState === "Live" && g.linescore?.offense?.batter
+              ? {
+                  battingSide: g.linescore.offense.team?.id === homeId ? "home" : "away",
+                  batter: g.linescore.offense.batter?.fullName || null,
+                  pitcher: g.linescore.defense?.pitcher?.fullName || null,
+                }
+              : null,
           status: {
             abstract: g.status?.abstractGameState || "Preview",
             detailed: g.status?.detailedState || "Scheduled",

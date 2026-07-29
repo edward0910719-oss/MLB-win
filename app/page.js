@@ -32,16 +32,6 @@ function toTaiwanTime(gameDateIso) {
 
 const INNING_HALF_ZH = { Top: "上", Bottom: "下", Middle: "中", End: "末" };
 
-function liveStatusLabel(g) {
-  const parts = ["（比賽進行中）"];
-  if (g.homeScore !== null && g.awayScore !== null) parts.push(`${g.awayScore}:${g.homeScore}`);
-  if (g.liveInning) {
-    const half = INNING_HALF_ZH[g.liveInning.half] || "";
-    parts.push(`${g.liveInning.number}局${half}`);
-  }
-  return parts.join(" ");
-}
-
 // last-refresh timestamp, Taiwan time, down to the second
 function toTaiwanClock(iso) {
   return new Date(iso).toLocaleTimeString("zh-TW", {
@@ -318,6 +308,38 @@ function TeamTag({ team, align, isHome, displayColor }) {
   );
 }
 
+// scoreboard-style matchup shown only while a game is live: team name + big centered
+// score, inning in the middle, and whichever of "打者"/"投手" applies to each side
+function LiveMatchup({ g, home, away, awayColor }) {
+  const half = INNING_HALF_ZH[g.liveInning?.half] || "";
+  const awayLabel =
+    g.liveAtBat?.battingSide === "away" ? `打者 ${g.liveAtBat.batter}` : g.liveAtBat?.battingSide === "home" ? `投手 ${g.liveAtBat.pitcher}` : null;
+  const homeLabel =
+    g.liveAtBat?.battingSide === "home" ? `打者 ${g.liveAtBat.batter}` : g.liveAtBat?.battingSide === "away" ? `投手 ${g.liveAtBat.pitcher}` : null;
+
+  return (
+    <div className="live-matchup">
+      <div className="live-team">
+        <div className="live-team-name">
+          <span className="team-dot" style={{ background: awayColor, boxShadow: `0 0 0 2px ${away.accent} inset` }} />
+          <span className="team-zh">{away.zh}<span className="team-role">（客）</span></span>
+        </div>
+        <div className="live-score" style={{ color: awayColor }}>{g.awayScore ?? "-"}</div>
+        {awayLabel && <div className="live-atbat">{awayLabel}</div>}
+      </div>
+      <div className="live-inning">{g.liveInning && <div className="live-inning-num">{g.liveInning.number}局{half}</div>}</div>
+      <div className="live-team">
+        <div className="live-team-name">
+          <span className="team-zh"><span className="team-role">（主）</span>{home.zh}</span>
+          <span className="team-dot" style={{ background: home.color, boxShadow: `0 0 0 2px ${home.accent} inset` }} />
+        </div>
+        <div className="live-score" style={{ color: home.color }}>{g.homeScore ?? "-"}</div>
+        {homeLabel && <div className="live-atbat">{homeLabel}</div>}
+      </div>
+    </div>
+  );
+}
+
 function GameCard({ g, onOpen, teamMap }) {
   const home = teamMap[g.home];
   const away = teamMap[g.away];
@@ -335,7 +357,7 @@ function GameCard({ g, onOpen, teamMap }) {
       {(g.recommended || g.timing.isLive || g.timing.isFinal) && (
         <div className="game-card-badges">
           {g.recommended && <span className="badge badge-recommend">推薦</span>}
-          {g.timing.isLive && <span className="badge badge-live">{liveStatusLabel(g)}</span>}
+          {g.timing.isLive && <span className="badge badge-live">（比賽進行中）</span>}
           {g.timing.isFinal && (
             <span className="badge badge-final">
               （比賽已結束）{g.homeScore !== null && ` 終場 ${g.awayScore}:${g.homeScore}`}
@@ -344,17 +366,23 @@ function GameCard({ g, onOpen, teamMap }) {
         </div>
       )}
 
-      <div className="matchup-row">
-        <TeamTag team={away} align="left" isHome={false} displayColor={awayColor} />
-        <span className="vs">@</span>
-        <TeamTag team={home} align="right" isHome={true} />
-      </div>
+      {g.timing.isLive ? (
+        <LiveMatchup g={g} home={home} away={away} awayColor={awayColor} />
+      ) : (
+        <>
+          <div className="matchup-row">
+            <TeamTag team={away} align="left" isHome={false} displayColor={awayColor} />
+            <span className="vs">@</span>
+            <TeamTag team={home} align="right" isHome={true} />
+          </div>
 
-      <div className="pitchers-row">
-        <span>{g.ap.name} <em>{g.ap.era.toFixed(2)} ERA</em></span>
-        <span className="pitchers-sep">vs</span>
-        <span>{g.hp.name} <em>{g.hp.era.toFixed(2)} ERA</em></span>
-      </div>
+          <div className="pitchers-row">
+            <span>{g.ap.name} <em>{g.ap.era.toFixed(2)} ERA</em></span>
+            <span className="pitchers-sep">vs</span>
+            <span>{g.hp.name} <em>{g.hp.era.toFixed(2)} ERA</em></span>
+          </div>
+        </>
+      )}
 
       <ProbBar homeProb={g.pred.homeProb} homeColor={home.color} awayColor={awayColor} />
 
@@ -396,7 +424,7 @@ function GameDetail({ g, onClose, teamMap }) {
         {(g.recommended || g.timing.isLive || g.timing.isFinal) && (
           <div className="game-card-badges" style={{ marginBottom: "0.8rem" }}>
             {g.recommended && <span className="badge badge-recommend">推薦</span>}
-            {g.timing.isLive && <span className="badge badge-live">{liveStatusLabel(g)}</span>}
+            {g.timing.isLive && <span className="badge badge-live">（比賽進行中）</span>}
             {g.timing.isFinal && (
               <span className="badge badge-final">
                 （比賽已結束）{g.homeScore !== null && ` 終場 ${g.awayScore}:${g.homeScore}`}
@@ -404,6 +432,8 @@ function GameDetail({ g, onClose, teamMap }) {
             )}
           </div>
         )}
+
+        {g.timing.isLive && <LiveMatchup g={g} home={home} away={away} awayColor={awayColor} />}
 
         <ProbBar homeProb={g.pred.homeProb} homeColor={home.color} awayColor={awayColor} />
         <div className="digits-row" style={{ marginBottom: "0.8rem" }}>
@@ -794,6 +824,20 @@ export default function MLBWinPredictor() {
           margin-bottom: 0.5rem;
         }
         .vs { font-family: 'Oswald', sans-serif; color: var(--muted); font-size: 0.85rem; }
+
+        .live-matchup {
+          display: grid;
+          grid-template-columns: 1fr auto 1fr;
+          align-items: start;
+          gap: 0.5rem;
+          margin-bottom: 0.7rem;
+        }
+        .live-team { text-align: center; min-width: 0; }
+        .live-team-name { display: flex; align-items: center; justify-content: center; gap: 0.4rem; margin-bottom: 0.3rem; }
+        .live-score { font-family: 'IBM Plex Mono', monospace; font-weight: 700; font-size: 2.4rem; line-height: 1; }
+        .live-atbat { font-size: 0.68rem; color: var(--muted); margin-top: 0.3rem; }
+        .live-inning { text-align: center; padding: 1.6rem 0.4rem 0; }
+        .live-inning-num { font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 0.95rem; color: var(--ink); white-space: nowrap; }
 
         .team-tag { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
         .team-tag.right { flex-direction: row-reverse; text-align: right; }
