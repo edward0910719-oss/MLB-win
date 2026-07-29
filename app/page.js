@@ -114,6 +114,15 @@ function last10Pct(t) {
   return w / (w + l);
 }
 
+function parkWeatherNote(pred) {
+  const parts = [`球場因素 ${pred.parkFactor}`];
+  if (pred.weatherTempF !== null && pred.weatherTempF !== undefined) {
+    const celsius = Math.round(((pred.weatherTempF - 32) * 5) / 9);
+    parts.push(`預估氣溫 ${celsius}°C`);
+  }
+  return parts.join(" ・ ");
+}
+
 // ---- prediction model ----
 // weighted logistic blend of: season win%, run-diff/game, starter ERA edge,
 // bullpen recent form, recent team form (last10), home-field bump, injury penalty
@@ -145,6 +154,11 @@ function predictGame(g, teamMap, leagueAvgEra) {
   const injuryPenaltyHome = home.injuries.length * 0.03;
   const injuryPenaltyAway = away.injuries.length * 0.03;
 
+  // a bullpen that threw extra innings within the last 2 days is a flat fragility penalty,
+  // not scaled by weight like the other edges (same treatment as the injury penalty above)
+  const fatiguePenaltyHome = g.homeBullpenFatigued ? 0.15 : 0;
+  const fatiguePenaltyAway = g.awayBullpenFatigued ? 0.15 : 0;
+
   let z =
     wWinPct * winPctEdge * 4 +
     wRunDiff * runDiffEdge * 4 +
@@ -154,7 +168,9 @@ function predictGame(g, teamMap, leagueAvgEra) {
     wLineup * lineupEdge * 4 +
     wHome * homeBump -
     injuryPenaltyHome * 4 +
-    injuryPenaltyAway * 4;
+    injuryPenaltyAway * 4 -
+    fatiguePenaltyHome * 4 +
+    fatiguePenaltyAway * 4;
 
   const homeProb = 1 / (1 + Math.exp(-z));
   const clamped = Math.min(0.93, Math.max(0.07, homeProb));
@@ -164,10 +180,13 @@ function predictGame(g, teamMap, leagueAvgEra) {
   const gamesAway = away.w + away.l;
   const homeRunsPerGame = home.rs / gamesHome;
   const awayRunsPerGame = away.rs / gamesAway;
-  // batting average adjusted by opposing starter's ERA vs league-average ERA, and by
-  // how today's actual lineup compares to the team's usual offensive output
-  const homeExpRuns = homeRunsPerGame * (g.ap.era / leagueAvgEra) * homeLineupFactor;
-  const awayExpRuns = awayRunsPerGame * (g.hp.era / leagueAvgEra) * awayLineupFactor;
+  // batting average adjusted by opposing starter's ERA vs league-average ERA, by how
+  // today's actual lineup compares to the team's usual offensive output, and by the
+  // home park's run environment and forecast temperature (both apply to both teams,
+  // since they're playing in the same park under the same sky)
+  const parkWeatherFactor = (home.parkFactor / 100) * g.weatherRunFactor;
+  const homeExpRuns = homeRunsPerGame * (g.ap.era / leagueAvgEra) * homeLineupFactor * parkWeatherFactor;
+  const awayExpRuns = awayRunsPerGame * (g.hp.era / leagueAvgEra) * awayLineupFactor * parkWeatherFactor;
   const totalExpRuns = homeExpRuns + awayExpRuns;
 
   // ---- probability favored team wins by more than 1 run ----
@@ -207,7 +226,20 @@ function predictGame(g, teamMap, leagueAvgEra) {
       },
       { label: "主場優勢", value: homeBump * 0.06, note: "固定加成" },
       { label: "傷兵影響", value: injuryPenaltyAway - injuryPenaltyHome, note: `${home.id}: ${home.injuries.length} 筆 / ${away.id}: ${away.injuries.length} 筆` },
+      {
+        label: "牛棚疲勞",
+        value: fatiguePenaltyAway - fatiguePenaltyHome,
+        note:
+          g.homeBullpenFatigued || g.awayBullpenFatigued
+            ? `${g.homeBullpenFatigued ? home.id + " 近2日曾打延長賽" : home.id + " 正常"} / ${g.awayBullpenFatigued ? away.id + " 近2日曾打延長賽" : away.id + " 正常"}`
+            : "雙方近2日皆無延長賽",
+      },
     ],
+    // park + weather affect the run environment for both teams equally, so they don't
+    // belong in the win-probability factor list above (which is about who's favored) —
+    // shown separately alongside the total-runs prediction instead
+    parkFactor: home.parkFactor,
+    weatherTempF: g.weatherTempF,
   };
 }
 
@@ -292,6 +324,7 @@ function GameCard({ g, onOpen, teamMap }) {
       <div className="extra-preds">
         <span>總分預測 <strong>{Math.round(g.pred.runs.low)}–{Math.round(g.pred.runs.high)}</strong> 分</span>
         <span>{favored.zh} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong></span>
+        <span>{parkWeatherNote(g.pred)}</span>
       </div>
     </button>
   );
@@ -334,6 +367,7 @@ function GameDetail({ g, onClose, teamMap }) {
           <span className="stat-pill">
             {(g.pred.homeProb >= 0.5 ? home.zh : away.zh)} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong>
           </span>
+          <span className="stat-pill">{parkWeatherNote(g.pred)}</span>
         </div>
 
         <h4 className="factor-heading">預測因子拆解</h4>

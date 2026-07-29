@@ -46,6 +46,38 @@ async function fetchJson(url) {
   return res.json();
 }
 
+// warmer air carries fly balls further, so a simple temperature-only heuristic is used as
+// a run-total nudge — wind direction is deliberately left out since getting it wrong (each
+// park has a different orientation) would be worse than not modeling it at all. Clamped so
+// a single hot/cold reading can't swing the total by more than ~8%.
+async function fetchWeatherRunFactor(venue, gameDateIso) {
+  if (!venue) return { tempF: null, runFactor: 1 };
+  try {
+    const points = await fetchJson(`https://api.weather.gov/points/${venue.lat},${venue.lon}`);
+    const hourlyUrl = points.properties?.forecastHourly;
+    if (!hourlyUrl) return { tempF: null, runFactor: 1 };
+    const hourly = await fetchJson(hourlyUrl);
+    const periods = hourly.properties?.periods || [];
+    const gameMs = new Date(gameDateIso).getTime();
+    let closest = null;
+    let closestDiffMs = Infinity;
+    for (const p of periods) {
+      const diff = Math.abs(new Date(p.startTime).getTime() - gameMs);
+      if (diff < closestDiffMs) {
+        closestDiffMs = diff;
+        closest = p;
+      }
+    }
+    if (!closest || typeof closest.temperature !== "number") return { tempF: null, runFactor: 1 };
+    const runFactor = Math.min(1.08, Math.max(0.92, 1 + (closest.temperature - 70) * 0.0025));
+    return { tempF: closest.temperature, runFactor };
+  } catch {
+    // weather.gov only covers US locations and can be flaky — a missing forecast just
+    // means no adjustment, not a broken page
+    return { tempF: null, runFactor: 1 };
+  }
+}
+
 export async function GET() {
   try {
     const now = new Date();
@@ -56,7 +88,10 @@ export async function GET() {
     const startParam = toMLBDateParam(tenDaysAgo);
     const endParam = toMLBDateParam(now);
 
-    const [teamsJson, scheduleJson, standingsJson, seasonPitchingJson, recentPitchingJson, seasonHittingJson] =
+    const yesterday = etDateString(new Date(now.getTime() - 24 * 60 * 60 * 1000));
+    const twoDaysAgo = etDateString(new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000));
+
+    const [teamsJson, scheduleJson, standingsJson, seasonPitchingJson, recentPitchingJson, seasonHittingJson, recentGamesJson] =
       await Promise.all([
         fetchJson(`${MLB_API}/teams?sportId=1&activeStatus=Y`),
         fetchJson(`${MLB_API}/schedule?sportId=1&date=${etDate}&hydrate=team,probablePitcher,lineups`),
@@ -66,7 +101,19 @@ export async function GET() {
           `${MLB_API}/teams/stats?stats=byDateRange&group=pitching&season=${season}&sportIds=1&startDate=${startParam}&endDate=${endParam}`
         ),
         fetchJson(`${MLB_API}/teams/stats?stats=season&group=hitting&season=${season}&sportIds=1`),
+        fetchJson(`${MLB_API}/schedule?sportId=1&startDate=${twoDaysAgo}&endDate=${yesterday}&hydrate=linescore`),
       ]);
+
+    // ---- bullpen fatigue: teams that played an extra-inning game in the last 2 days ----
+    const fatiguedTeamIds = new Set();
+    for (const day of recentGamesJson.dates || []) {
+      for (const g of day.games || []) {
+        if (g.status?.abstractGameState === "Final" && (g.linescore?.currentInning ?? 0) > 9) {
+          fatiguedTeamIds.add(g.teams.home.team.id);
+          fatiguedTeamIds.add(g.teams.away.team.id);
+        }
+      }
+    }
 
     // ---- team identity: id -> { abbr, city, name } from live team list ----
     const teamIdentity = {};
@@ -184,6 +231,19 @@ export async function GET() {
       return { ops: teamOpsMap[teamId] ?? 0.7, confirmed: false };
     }
 
+    // ---- weather at each home park's coordinates, around first pitch (skipped for domes) ----
+    const weatherMap = {};
+    await Promise.all(
+      rawGames.map(async (g) => {
+        const homeMeta = TEAM_META[g.teams.home.team.id];
+        if (!homeMeta || homeMeta.isDome) {
+          weatherMap[g.gamePk] = { tempF: null, runFactor: 1 };
+          return;
+        }
+        weatherMap[g.gamePk] = await fetchWeatherRunFactor(homeMeta.venue, g.gameDate);
+      })
+    );
+
     // ---- assemble TEAMS (all 30 clubs, for the standings tab) ----
     const teams = Object.entries(TEAM_META).map(([idStr, meta]) => {
       const id = Number(idStr);
@@ -206,6 +266,7 @@ export async function GET() {
         era,
         bp10: recentEraMap[id] ?? era,
         ops: teamOpsMap[id] ?? 0.7,
+        parkFactor: meta.parkFactor,
         injuries: injuryMap[id] || [],
       };
     });
@@ -232,6 +293,7 @@ export async function GET() {
         if (!homeAbbr || !awayAbbr || !TEAM_META[homeId] || !TEAM_META[awayId]) return null;
         const homeLineup = lineupOps(homeId, g.lineups?.homePlayers);
         const awayLineup = lineupOps(awayId, g.lineups?.awayPlayers);
+        const weather = weatherMap[g.gamePk] || { tempF: null, runFactor: 1 };
         return {
           gamePk: g.gamePk,
           home: homeAbbr,
@@ -244,6 +306,10 @@ export async function GET() {
           awayLineupOps: awayLineup.ops,
           homeLineupConfirmed: homeLineup.confirmed,
           awayLineupConfirmed: awayLineup.confirmed,
+          homeBullpenFatigued: fatiguedTeamIds.has(homeId),
+          awayBullpenFatigued: fatiguedTeamIds.has(awayId),
+          weatherTempF: weather.tempF,
+          weatherRunFactor: weather.runFactor,
           status: {
             abstract: g.status?.abstractGameState || "Preview",
             detailed: g.status?.detailedState || "Scheduled",
