@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect, useCallback } from "react";
+import { winPct } from "@/lib/predict";
 
 /* ============================================================
    DESIGN TOKENS — Ballpark Scoreboard
@@ -43,34 +44,6 @@ function toTaiwanClock(iso) {
   });
 }
 
-// predictions stop updating once a game is within this many minutes of first pitch
-const PREDICTION_LOCK_MINUTES = 5;
-
-function getGameTiming(gameDateIso, status) {
-  const startMs = new Date(gameDateIso).getTime();
-  const lockMs = startMs - PREDICTION_LOCK_MINUTES * 60 * 1000;
-  const isLive = status?.abstract === "Live";
-  const isFinal = status?.abstract === "Final";
-  const isLocked = !isLive && !isFinal && Date.now() >= lockMs;
-  return { isLive, isFinal, isLocked, frozen: isLive || isFinal || isLocked };
-}
-
-// once a game enters its prediction-lock window, freeze whatever prediction was showing at
-// that moment in localStorage so later refreshes (new pitcher/lineup data, etc.) can't change
-// the number retroactively — there is no backend, so the browser's own storage is the only
-// place this can live
-function getStablePrediction(storageKey, freshPred, shouldFreeze) {
-  if (!shouldFreeze || typeof window === "undefined") return freshPred;
-  try {
-    const stored = window.localStorage.getItem(storageKey);
-    if (stored) return JSON.parse(stored);
-    window.localStorage.setItem(storageKey, JSON.stringify(freshPred));
-  } catch {
-    // localStorage unavailable (private browsing, quota, etc.) — just fall through to freshPred
-  }
-  return freshPred;
-}
-
 // grades the (locked-in) prediction against the real final score once a game is over —
 // null fields mean "not graded yet" (game isn't final, or the score hasn't come back)
 function getGrade(g) {
@@ -97,19 +70,6 @@ function ouLines(pred) {
   return { big: mid + 0.5, small: mid - 0.5 };
 }
 
-// standard normal CDF via Abramowitz-Stegun erf approximation
-function erf(x) {
-  const sign = x >= 0 ? 1 : -1;
-  x = Math.abs(x);
-  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
-  const t = 1 / (1 + p * x);
-  const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
-  return sign * y;
-}
-function normCdf(x) {
-  return 0.5 * (1 + erf(x / Math.sqrt(2)));
-}
-
 // ---- color contrast helpers ----
 function hexToRgb(hex) {
   const clean = hex.replace("#", "");
@@ -129,145 +89,6 @@ function getAwayDisplayColor(home, away) {
   if (distPrimary >= COLOR_CLASH_THRESHOLD) return away.color;
   const distAccent = colorDistance(home.color, away.accent);
   return distAccent > distPrimary ? away.accent : away.color;
-}
-
-function winPct(t) {
-  return t.w / (t.w + t.l);
-}
-function runDiffPerGame(t) {
-  return (t.rs - t.ra) / (t.w + t.l);
-}
-
-// ---- prediction model ----
-// weighted logistic blend of: season win%, run-diff/game, starter ERA edge,
-// recent team pitching form, lineup strength, home-field bump, and penalties for
-// significant injuries / a fatigued bullpen.
-//
-// Deliberately NOT included: last-10-games win/loss record. It's one of the more
-// well-known false signals in sports analytics — 10 games is too small a sample to add
-// information beyond what's already in the season-long stats, so it was dropped rather
-// than left in as noise.
-function predictGame(g, teamMap, leagueAvgEra) {
-  const home = teamMap[g.home];
-  const away = teamMap[g.away];
-
-  const wWinPct = 0.38;
-  const wRunDiff = 0.22;
-  const wPitcher = 0.20;
-  const wBullpen = 0.10;
-  const wHome = 0.06;
-  const wLineup = 0.08;
-
-  const winPctEdge = winPct(home) - winPct(away);
-  const runDiffEdge = (runDiffPerGame(home) - runDiffPerGame(away)) / 3; // scaled
-  const pitcherEdge = (g.ap.era - g.hp.era) / 3; // lower ERA is better, so away-home
-  const bullpenEdge = (away.bp10 - home.bp10) / 3; // lower recent team ERA is better
-  const homeBump = 1;
-
-  // ratio of today's actual (or, if unpublished, season-average) lineup OPS to the
-  // team's own season OPS — 1.0 means an average lineup, >1 a stronger-than-usual one
-  const homeLineupFactor = g.homeLineupOps / (home.ops || g.homeLineupOps);
-  const awayLineupFactor = g.awayLineupOps / (away.ops || g.awayLineupOps);
-  const lineupEdge = homeLineupFactor - awayLineupFactor;
-
-  // only rotation-caliber pitchers (>=5 starts this season) and regular position players
-  // (>=150 plate appearances) count here — a stack of minor/bench IL stints shouldn't be
-  // penalized the same as losing an actual starter
-  const injuryPenaltyHome = home.significantInjuryCount * 0.08;
-  const injuryPenaltyAway = away.significantInjuryCount * 0.08;
-
-  // a bullpen that threw extra innings within the last 2 days is a flat fragility penalty,
-  // not scaled by weight like the other edges (same treatment as the injury penalty above)
-  const fatiguePenaltyHome = g.homeBullpenFatigued ? 0.15 : 0;
-  const fatiguePenaltyAway = g.awayBullpenFatigued ? 0.15 : 0;
-
-  let z =
-    wWinPct * winPctEdge * 4 +
-    wRunDiff * runDiffEdge * 4 +
-    wPitcher * pitcherEdge * 4 +
-    wBullpen * bullpenEdge * 4 +
-    wLineup * lineupEdge * 4 +
-    wHome * homeBump -
-    injuryPenaltyHome * 4 +
-    injuryPenaltyAway * 4 -
-    fatiguePenaltyHome * 4 +
-    fatiguePenaltyAway * 4;
-
-  const homeProb = 1 / (1 + Math.exp(-z));
-  const clamped = Math.min(0.93, Math.max(0.07, homeProb));
-
-  // ---- expected total runs (+-1) ----
-  const gamesHome = home.w + home.l;
-  const gamesAway = away.w + away.l;
-  const homeRunsPerGame = home.rs / gamesHome;
-  const awayRunsPerGame = away.rs / gamesAway;
-  // batting average adjusted by opposing starter's ERA vs league-average ERA, by how
-  // today's actual lineup compares to the team's usual offensive output, and by the
-  // home park's run environment and forecast temperature (both apply to both teams,
-  // since they're playing in the same park under the same sky)
-  const parkWeatherFactor = (home.parkFactor / 100) * g.weatherRunFactor;
-  const homeExpRuns = homeRunsPerGame * (g.ap.era / leagueAvgEra) * homeLineupFactor * parkWeatherFactor;
-  const awayExpRuns = awayRunsPerGame * (g.hp.era / leagueAvgEra) * awayLineupFactor * parkWeatherFactor;
-  const totalExpRuns = homeExpRuns + awayExpRuns;
-
-  // ---- probability favored team wins by more than 1 run ----
-  const marginMeanHome = homeExpRuns - awayExpRuns; // positive favors home
-  const marginStd = Math.sqrt(Math.max(totalExpRuns, 1.5));
-  let marginProb;
-  if (clamped >= 0.5) {
-    // home favored: P(home margin > 1)
-    marginProb = 1 - normCdf((1 - marginMeanHome) / marginStd);
-  } else {
-    // away favored: P(home margin < -1)  == P(away wins by more than 1)
-    marginProb = normCdf((-1 - marginMeanHome) / marginStd);
-  }
-  marginProb = Math.min(0.95, Math.max(0.05, marginProb));
-
-  return {
-    homeProb: clamped,
-    awayProb: 1 - clamped,
-    runs: {
-      home: homeExpRuns,
-      away: awayExpRuns,
-      total: totalExpRuns,
-      low: Math.max(0, totalExpRuns - 1),
-      high: totalExpRuns + 1,
-    },
-    marginProb,
-    factors: [
-      { label: "球季戰績", value: winPctEdge, note: `${home.id} ${(winPct(home) * 100).toFixed(1)}% vs ${away.id} ${(winPct(away) * 100).toFixed(1)}%` },
-      { label: "得失分差/場", value: runDiffEdge, note: `${runDiffPerGame(home).toFixed(2)} vs ${runDiffPerGame(away).toFixed(2)}` },
-      { label: "先發投手 ERA", value: -pitcherEdge, note: `${g.hp.name} ${g.hp.era.toFixed(2)} vs ${g.ap.name} ${g.ap.era.toFixed(2)}` },
-      { label: "近況投手戰力(ERA)", value: bullpenEdge, note: `${home.id} ${home.bp10.toFixed(2)} vs ${away.id} ${away.bp10.toFixed(2)}（近10日球隊整體，非純牛棚）` },
-      {
-        label: "打線攻擊力(OPS)",
-        value: lineupEdge,
-        note: `${home.id} ${g.homeLineupOps.toFixed(3)}${g.homeLineupConfirmed ? "(先發已公布)" : "(球隊平均)"} vs ${away.id} ${g.awayLineupOps.toFixed(3)}${g.awayLineupConfirmed ? "(先發已公布)" : "(球隊平均)"}`,
-      },
-      { label: "主場優勢", value: homeBump * 0.06, note: "固定加成" },
-      {
-        label: "重大傷兵影響",
-        value: injuryPenaltyAway - injuryPenaltyHome,
-        note: `${home.id}: ${home.significantInjuryCount} 筆重大 / ${home.injuries.length} 筆總計・${away.id}: ${away.significantInjuryCount} 筆重大 / ${away.injuries.length} 筆總計`,
-      },
-      {
-        label: "牛棚疲勞",
-        value: fatiguePenaltyAway - fatiguePenaltyHome,
-        note:
-          g.homeBullpenFatigued || g.awayBullpenFatigued
-            ? `${g.homeBullpenFatigued ? home.id + " 近2日曾打延長賽" : home.id + " 正常"} / ${g.awayBullpenFatigued ? away.id + " 近2日曾打延長賽" : away.id + " 正常"}`
-            : "雙方近2日皆無延長賽",
-      },
-      // park + weather affect the run environment for both teams equally (they influence
-      // the total-runs number, not who's favored), so they're shown here with no lean
-      { label: "球場因素", value: 0, note: `${home.id} 主場 ${home.parkFactor}（100為中性，數字越高對打者越有利）` },
-      {
-        label: "預估氣溫",
-        value: 0,
-        note: g.weatherTempF !== null ? `${Math.round(((g.weatherTempF - 32) * 5) / 9)}°C` : "室內球場或無預報資料",
-      },
-    ],
-  };
 }
 
 /* ================= UI ================= */
@@ -573,6 +394,62 @@ function StandingsTable({ teams, query }) {
   );
 }
 
+function pctLabel(rate, total) {
+  if (total === 0) return "—";
+  return `${Math.round(rate * 100)}%`;
+}
+
+function HistoryTable({ data, status }) {
+  if (status === "loading" || status === "idle") {
+    return <p className="muted" style={{ padding: "1.4rem 2rem" }}>正在讀取近7天的預測紀錄…</p>;
+  }
+  if (status === "error") {
+    return <p className="muted" style={{ padding: "1.4rem 2rem" }}>讀取歷史預測資料失敗，請稍後再試。</p>;
+  }
+  if (!data || data.days.length === 0) {
+    return <p className="muted" style={{ padding: "1.4rem 2rem" }}>還沒有已鎖定並完賽的比賽紀錄。</p>;
+  }
+
+  return (
+    <div className="standings-wrap">
+      <div className="stat-pill-row" style={{ marginBottom: "1rem" }}>
+        <span className="stat-pill">
+          推薦場次獨贏成功率 <strong>{pctLabel(data.recommended.rate, data.recommended.total)}</strong>
+          （{data.recommended.correct}/{data.recommended.total} 場，近7天）
+        </span>
+      </div>
+      <div className="standings-group">
+        <table className="standings-table">
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>獨贏預測場次</th>
+              <th>獨贏正確</th>
+              <th>獨贏成功率</th>
+              <th>大小分預測場次</th>
+              <th>大小分正確</th>
+              <th>大小分成功率</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.days.map((d) => (
+              <tr key={d.date}>
+                <td className="mono">{d.date}</td>
+                <td>{d.winTotal}</td>
+                <td>{d.winCorrect}</td>
+                <td className="mono">{pctLabel(d.winRate, d.winTotal)}</td>
+                <td>{d.runsTotal}</td>
+                <td>{d.runsCorrect}</td>
+                <td className="mono">{pctLabel(d.runsRate, d.runsTotal)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function MLBWinPredictor() {
   const [view, setView] = useState("games");
   const [query, setQuery] = useState("");
@@ -582,6 +459,9 @@ export default function MLBWinPredictor() {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("loading"); // loading | ready | error
   const [errorMsg, setErrorMsg] = useState("");
+
+  const [historyData, setHistoryData] = useState(null);
+  const [historyStatus, setHistoryStatus] = useState("idle"); // idle | loading | ready | error
 
   useEffect(() => {
     const link = document.createElement("link");
@@ -610,39 +490,43 @@ export default function MLBWinPredictor() {
     loadGames();
   }, [loadGames]);
 
+  useEffect(() => {
+    if (view !== "history" || historyStatus !== "idle") return;
+    setHistoryStatus("loading");
+    fetch("/api/history")
+      .then((res) => res.json().then((json) => ({ ok: res.ok, json })))
+      .then(({ ok, json }) => {
+        if (!ok) throw new Error(json.error || "取得歷史資料失敗");
+        setHistoryData(json);
+        setHistoryStatus("ready");
+      })
+      .catch(() => setHistoryStatus("error"));
+  }, [view, historyStatus]);
+
   const teams = data?.teams || [];
   const rawGames = data?.games || [];
 
   const teamMap = useMemo(() => Object.fromEntries(teams.map((t) => [t.id, t])), [teams]);
-  const leagueAvgEra = useMemo(
-    () => (teams.length ? teams.reduce((s, t) => s + t.era, 0) / teams.length : 4.0),
-    [teams]
-  );
 
   const divisions = useMemo(
     () => ["all", ...Array.from(new Set(teams.map((t) => t.div)))],
     [teams]
   );
 
+  // pred, recommended, and the lock/grade state are all computed and persisted
+  // server-side (app/api/games/route.js) so every visitor sees the same numbers —
+  // this just adds the display-only bits
   const GAMES = useMemo(() => {
     if (!teams.length) return [];
-    const withPred = rawGames
+    return rawGames
       .filter((g) => teamMap[g.home] && teamMap[g.away])
-      .map((g) => {
-        const timing = getGameTiming(g.gameDateIso, g.status);
-        const freshPred = predictGame(g, teamMap, leagueAvgEra);
-        const storageKey = `mlbpred:${data?.date}:${g.gamePk}`;
-        const pred = getStablePrediction(storageKey, freshPred, timing.frozen);
-        return { ...g, twTime: toTaiwanTime(g.gameDateIso), timing, pred, confidence: Math.abs(pred.homeProb - 0.5) };
-      });
-    const top3 = new Set(
-      [...withPred]
-        .sort((a, b) => b.confidence - a.confidence)
-        .slice(0, 3)
-        .map((g) => g.gamePk)
-    );
-    return withPred.map((g) => ({ ...g, recommended: top3.has(g.gamePk) }));
-  }, [rawGames, teamMap, leagueAvgEra, data?.date]);
+      .map((g) => ({
+        ...g,
+        twTime: toTaiwanTime(g.gameDateIso),
+        timing: { isLive: g.status.abstract === "Live", isFinal: g.status.abstract === "Final" },
+        confidence: Math.abs(g.pred.homeProb - 0.5),
+      }));
+  }, [rawGames, teamMap]);
 
   const filteredGames = useMemo(() => {
     const filtered = GAMES.filter((g) => {
@@ -1102,6 +986,9 @@ export default function MLBWinPredictor() {
               <button className={`tab-btn ${view === "standings" ? "active" : ""}`} onClick={() => setView("standings")}>
                 戰績排行
               </button>
+              <button className={`tab-btn ${view === "history" ? "active" : ""}`} onClick={() => setView("history")}>
+                歷史預測
+              </button>
             </div>
             <input
               className="search-input"
@@ -1129,8 +1016,10 @@ export default function MLBWinPredictor() {
                 <GameCard key={g.gamePk} g={g} onOpen={setOpenGame} teamMap={teamMap} />
               ))}
             </div>
-          ) : (
+          ) : view === "standings" ? (
             <StandingsTable teams={teams} query={query} />
+          ) : (
+            <HistoryTable data={historyData} status={historyStatus} />
           )}
 
           <p className="disclaimer">

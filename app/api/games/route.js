@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { TEAM_META } from "@/lib/teamMeta";
+import { predictGame } from "@/lib/predict";
+import { lockPrediction, getLockedPredictions, gradeResult } from "@/lib/db";
+
+// predictions stop updating once a game is within this many minutes of first pitch
+const PREDICTION_LOCK_MINUTES = 5;
 
 const MLB_API = "https://statsapi.mlb.com/api/v1";
 // how often Next.js may reuse a cached copy of each upstream MLB response
@@ -432,11 +437,85 @@ export async function GET() {
       })
       .filter(Boolean);
 
+    // ---- predictions: compute fresh, then read/write the lock+grade state in Postgres so
+    // every visitor (and the 歷史預測 history tab) sees the same locked-in snapshot ----
+    const teamMap = Object.fromEntries(teams.map((t) => [t.id, t]));
+    const leagueAvgEra = teams.length ? teams.reduce((s, t) => s + t.era, 0) / teams.length : 4.0;
+
+    function isGameLocked(g) {
+      const lockMs = new Date(g.gameDateIso).getTime() - PREDICTION_LOCK_MINUTES * 60 * 1000;
+      return g.status.abstract === "Live" || g.status.abstract === "Final" || Date.now() >= lockMs;
+    }
+
+    let lockedByGamePk = {};
+    try {
+      const shouldLockGamePks = games.filter(isGameLocked).map((g) => g.gamePk);
+      const lockedRows = shouldLockGamePks.length ? await getLockedPredictions(shouldLockGamePks, etDate) : [];
+      lockedByGamePk = Object.fromEntries(lockedRows.map((r) => [Number(r.game_pk), r]));
+    } catch {
+      // DB unreachable — degrade to always-fresh predictions rather than breaking the page
+    }
+
+    const freshPredByGamePk = Object.fromEntries(games.map((g) => [g.gamePk, predictGame(g, teamMap, leagueAvgEra)]));
+    const predByGamePk = Object.fromEntries(
+      games.map((g) => [g.gamePk, lockedByGamePk[g.gamePk]?.pred_json ?? freshPredByGamePk[g.gamePk]])
+    );
+
+    const top3GamePks = new Set(
+      [...games]
+        .sort((a, b) => Math.abs(predByGamePk[b.gamePk].homeProb - 0.5) - Math.abs(predByGamePk[a.gamePk].homeProb - 0.5))
+        .slice(0, 3)
+        .map((g) => g.gamePk)
+    );
+
+    await Promise.all(
+      games
+        .filter((g) => isGameLocked(g) && !lockedByGamePk[g.gamePk])
+        .map((g) =>
+          lockPrediction({
+            gamePk: g.gamePk,
+            slateDate: etDate,
+            homeTeam: g.home,
+            awayTeam: g.away,
+            homeZh: teamMap[g.home].zh,
+            awayZh: teamMap[g.away].zh,
+            homeProb: freshPredByGamePk[g.gamePk].homeProb,
+            runsLow: freshPredByGamePk[g.gamePk].runs.low,
+            runsHigh: freshPredByGamePk[g.gamePk].runs.high,
+            recommended: top3GamePks.has(g.gamePk),
+            pred: freshPredByGamePk[g.gamePk],
+          }).catch(() => {})
+        )
+    );
+
+    await Promise.all(
+      games
+        .filter((g) => {
+          const row = lockedByGamePk[g.gamePk];
+          return g.status.abstract === "Final" && row && !row.graded_at && g.homeScore !== null && g.awayScore !== null;
+        })
+        .map((g) => {
+          const row = lockedByGamePk[g.gamePk];
+          const predictedHomeWin = row.home_prob >= 0.5;
+          const actualHomeWin = g.homeScore > g.awayScore;
+          const actualTotal = g.homeScore + g.awayScore;
+          const winCorrect = predictedHomeWin === actualHomeWin;
+          const runsCorrect = actualTotal >= Math.round(row.runs_low) && actualTotal <= Math.round(row.runs_high);
+          return gradeResult(g.gamePk, etDate, g.homeScore, g.awayScore, winCorrect, runsCorrect).catch(() => {});
+        })
+    );
+
+    const gamesWithPred = games.map((g) => ({
+      ...g,
+      pred: predByGamePk[g.gamePk],
+      recommended: lockedByGamePk[g.gamePk]?.recommended ?? top3GamePks.has(g.gamePk),
+    }));
+
     return NextResponse.json({
       date: etDate,
       generatedAt: new Date().toISOString(),
       teams,
-      games,
+      games: gamesWithPred,
     });
   } catch (err) {
     return NextResponse.json(
