@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-import { getRecentPredictions } from "@/lib/db";
-
-const HISTORY_DAYS = 7;
+import { getAllPredictions } from "@/lib/db";
 
 function toDateKey(slateDate) {
   // The driver parses a DATE column into a JS Date at *local* midnight for that
@@ -16,7 +14,7 @@ function toDateKey(slateDate) {
 
 export async function GET() {
   try {
-    const rows = await getRecentPredictions(HISTORY_DAYS);
+    const rows = await getAllPredictions();
 
     const byDate = {};
     for (const r of rows) {

@@ -398,7 +398,7 @@ function pctLabel(rate, total) {
 
 function HistoryTable({ data, status }) {
   if (status === "loading" || status === "idle") {
-    return <p className="muted" style={{ padding: "1.4rem 2rem" }}>正在讀取近7天的預測紀錄…</p>;
+    return <p className="muted" style={{ padding: "1.4rem 2rem" }}>正在讀取本季的預測紀錄…</p>;
   }
   if (status === "error") {
     return <p className="muted" style={{ padding: "1.4rem 2rem" }}>讀取歷史預測資料失敗，請稍後再試。</p>;
@@ -412,7 +412,7 @@ function HistoryTable({ data, status }) {
       <div className="stat-pill-row" style={{ marginBottom: "1rem" }}>
         <span className="stat-pill">
           推薦場次獨贏成功率 <strong>{pctLabel(data.recommended.rate, data.recommended.total)}</strong>
-          （{data.recommended.correct}/{data.recommended.total} 場，近7天）
+          （{data.recommended.correct}/{data.recommended.total} 場，本季累計）
         </span>
       </div>
       <div className="standings-group">
