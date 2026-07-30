@@ -89,6 +89,14 @@ function getGrade(g) {
   };
 }
 
+// over/under-style display of the runs.low–runs.high range: half-point lines avoid
+// ties and read like a normal betting board ("大9.5、小8.5"); the ✓/✗ grading above is
+// unaffected — it still checks the full inclusive low–high range, this is just the label
+function ouLines(pred) {
+  const mid = Math.round(pred.runs.total);
+  return { big: mid + 0.5, small: mid - 0.5 };
+}
+
 // standard normal CDF via Abramowitz-Stegun erf approximation
 function erf(x) {
   const sign = x >= 0 ? 1 : -1;
@@ -345,7 +353,13 @@ function LiveMatchup({ g, home, away, awayColor }) {
         <div className="live-score" style={{ color: awayColor }}>{g.awayScore ?? "-"}</div>
         {awayLabel && <div className="live-atbat">{awayLabel}</div>}
       </div>
-      <div className="live-inning">{g.liveInning && <div className="live-inning-num">{g.liveInning.number}局{half}</div>}</div>
+      <div className="live-inning">
+        {g.timing.isFinal ? (
+          <div className="live-inning-num">比賽結束</div>
+        ) : (
+          g.liveInning && <div className="live-inning-num">{g.liveInning.number}局{half}</div>
+        )}
+      </div>
       <div className="live-team">
         <div className="live-team-name">
           <span className="team-zh"><span className="team-role">（主）</span>{home.zh}</span>
@@ -376,15 +390,11 @@ function GameCard({ g, onOpen, teamMap }) {
         <div className="game-card-badges">
           {g.recommended && <span className="badge badge-recommend">推薦</span>}
           {g.timing.isLive && <span className="badge badge-live">（比賽進行中）</span>}
-          {g.timing.isFinal && (
-            <span className="badge badge-final">
-              （比賽已結束）{g.homeScore !== null && ` 終場 ${g.awayScore}:${g.homeScore}`}
-            </span>
-          )}
+          {g.timing.isFinal && <span className="badge badge-final">（比賽已結束）</span>}
         </div>
       )}
 
-      {g.timing.isLive ? (
+      {g.timing.isLive || g.timing.isFinal ? (
         <LiveMatchup g={g} home={home} away={away} awayColor={awayColor} />
       ) : (
         <>
@@ -414,7 +424,7 @@ function GameCard({ g, onOpen, teamMap }) {
           獨贏 {favored.zh} {Math.round(favPct * 100)}% <GradeMark correct={grade.winCorrect} />
         </span>
         <span>
-          總分預測 <strong>{Math.round(g.pred.runs.low)}–{Math.round(g.pred.runs.high)}</strong> 分 <GradeMark correct={grade.runsCorrect} />
+          總分預測 <strong>大{ouLines(g.pred).big}、小{ouLines(g.pred).small}</strong> <GradeMark correct={grade.runsCorrect} />
         </span>
         <span>{favored.zh} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong></span>
       </div>
@@ -443,15 +453,11 @@ function GameDetail({ g, onClose, teamMap }) {
           <div className="game-card-badges" style={{ marginBottom: "0.8rem" }}>
             {g.recommended && <span className="badge badge-recommend">推薦</span>}
             {g.timing.isLive && <span className="badge badge-live">（比賽進行中）</span>}
-            {g.timing.isFinal && (
-              <span className="badge badge-final">
-                （比賽已結束）{g.homeScore !== null && ` 終場 ${g.awayScore}:${g.homeScore}`}
-              </span>
-            )}
+            {g.timing.isFinal && <span className="badge badge-final">（比賽已結束）</span>}
           </div>
         )}
 
-        {g.timing.isLive && <LiveMatchup g={g} home={home} away={away} awayColor={awayColor} />}
+        {(g.timing.isLive || g.timing.isFinal) && <LiveMatchup g={g} home={home} away={away} awayColor={awayColor} />}
 
         <ProbBar homeProb={g.pred.homeProb} homeColor={home.color} awayColor={awayColor} />
         <div className="digits-row" style={{ marginBottom: "0.8rem" }}>
@@ -461,7 +467,7 @@ function GameDetail({ g, onClose, teamMap }) {
 
         <div className="stat-pill-row">
           <span className="stat-pill">
-            預測總分 <strong>{Math.round(g.pred.runs.total)}</strong> 分（區間 {Math.round(g.pred.runs.low)}–{Math.round(g.pred.runs.high)}） <GradeMark correct={grade.runsCorrect} />
+            總分預測 <strong>大{ouLines(g.pred).big}、小{ouLines(g.pred).small}</strong> <GradeMark correct={grade.runsCorrect} />
           </span>
           <span className="stat-pill">
             {(g.pred.homeProb >= 0.5 ? home.zh : away.zh)} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong> <GradeMark correct={grade.winCorrect} />
