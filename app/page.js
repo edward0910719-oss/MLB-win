@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect, useCallback } from "react";
-import { winPct } from "@/lib/predict";
+import { winPct, ouLine } from "@/lib/predict";
 
 /* ============================================================
    DESIGN TOKENS — Ballpark Scoreboard
@@ -53,21 +53,18 @@ function getGrade(g) {
   const predictedHomeWin = g.pred.homeProb >= 0.5;
   const actualHomeWin = g.homeScore > g.awayScore;
   const actualTotal = g.homeScore + g.awayScore;
-  const lowR = Math.round(g.pred.runs.low);
-  const highR = Math.round(g.pred.runs.high);
+  const { line, isOver } = ouLine(g.pred);
   return {
     winCorrect: predictedHomeWin === actualHomeWin,
-    runsCorrect: actualTotal >= lowR && actualTotal <= highR,
+    runsCorrect: isOver ? actualTotal > line : actualTotal < line,
     actualTotal,
   };
 }
 
-// over/under-style display of the runs.low–runs.high range: half-point lines avoid
-// ties and read like a normal betting board ("大9.5、小8.5"); the ✓/✗ grading above is
-// unaffected — it still checks the full inclusive low–high range, this is just the label
-function ouLines(pred) {
-  const mid = Math.round(pred.runs.total);
-  return { big: mid + 0.5, small: mid - 0.5 };
+// single betting-board-style O/U label, e.g. "大9.5" or "小9.5"
+function ouLabel(pred) {
+  const { line, isOver } = ouLine(pred);
+  return `${isOver ? "大" : "小"}${line}`;
 }
 
 // ---- color contrast helpers ----
@@ -245,7 +242,7 @@ function GameCard({ g, onOpen, teamMap }) {
           獨贏 {favored.zh} {Math.round(favPct * 100)}% <GradeMark correct={grade.winCorrect} />
         </span>
         <span>
-          總分預測 <strong>大{ouLines(g.pred).big}、小{ouLines(g.pred).small}</strong> <GradeMark correct={grade.runsCorrect} />
+          總分預測 <strong>{ouLabel(g.pred)}</strong> <GradeMark correct={grade.runsCorrect} />
         </span>
         <span>{favored.zh} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong></span>
       </div>
@@ -288,7 +285,7 @@ function GameDetail({ g, onClose, teamMap }) {
 
         <div className="stat-pill-row">
           <span className="stat-pill">
-            總分預測 <strong>大{ouLines(g.pred).big}、小{ouLines(g.pred).small}</strong> <GradeMark correct={grade.runsCorrect} />
+            總分預測 <strong>{ouLabel(g.pred)}</strong> <GradeMark correct={grade.runsCorrect} />
           </span>
           <span className="stat-pill">
             {(g.pred.homeProb >= 0.5 ? home.zh : away.zh)} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong> <GradeMark correct={grade.winCorrect} />

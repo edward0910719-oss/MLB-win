@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { TEAM_META } from "@/lib/teamMeta";
-import { predictGame } from "@/lib/predict";
+import { predictGame, ouLine } from "@/lib/predict";
 import { lockPrediction, getLockedPredictions, gradeResult } from "@/lib/db";
 
 // predictions stop updating once a game is within this many minutes of first pitch
@@ -500,7 +500,8 @@ export async function GET() {
           const actualHomeWin = g.homeScore > g.awayScore;
           const actualTotal = g.homeScore + g.awayScore;
           const winCorrect = predictedHomeWin === actualHomeWin;
-          const runsCorrect = actualTotal >= Math.round(row.runs_low) && actualTotal <= Math.round(row.runs_high);
+          const { line, isOver } = ouLine(row.pred_json);
+          const runsCorrect = isOver ? actualTotal > line : actualTotal < line;
           return gradeResult(g.gamePk, etDate, g.homeScore, g.awayScore, winCorrect, runsCorrect).catch(() => {});
         })
     );
