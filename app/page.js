@@ -244,7 +244,7 @@ function GameCard({ g, onOpen, teamMap }) {
         <span>
           總分預測 <strong>{ouLabel(g.pred)}</strong> <GradeMark correct={grade.runsCorrect} />
         </span>
-        <span>{favored.zh} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong></span>
+        <span>{favored.zh} 贏球差距 &gt;1.5分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong></span>
       </div>
     </button>
   );
@@ -288,7 +288,7 @@ function GameDetail({ g, onClose, teamMap }) {
             總分預測 <strong>{ouLabel(g.pred)}</strong> <GradeMark correct={grade.runsCorrect} />
           </span>
           <span className="stat-pill">
-            {(g.pred.homeProb >= 0.5 ? home.zh : away.zh)} 贏球差距 &gt;1分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong> <GradeMark correct={grade.winCorrect} />
+            {(g.pred.homeProb >= 0.5 ? home.zh : away.zh)} 贏球差距 &gt;1.5分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong> <GradeMark correct={grade.winCorrect} />
           </span>
         </div>
 
