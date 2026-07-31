@@ -541,9 +541,9 @@ export default function MLBWinPredictor() {
       const matchesDiv = division === "all" ? true : home.div === division || away.div === division;
       return matchesQuery && matchesDiv;
     });
-    // recommended (top-3 most confident) games lead the list; everything else keeps its original order
+    // recommended (top-3 most confident) games lead the list; everything else is sorted by game time
     const recommended = filtered.filter((g) => g.recommended).sort((a, b) => b.confidence - a.confidence);
-    const rest = filtered.filter((g) => !g.recommended);
+    const rest = filtered.filter((g) => !g.recommended).sort((a, b) => new Date(a.gameDateIso) - new Date(b.gameDateIso));
     return [...recommended, ...rest];
   }, [GAMES, query, division, teamMap]);
 
