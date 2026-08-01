@@ -20,7 +20,7 @@ export async function GET() {
     for (const r of rows) {
       const dateKey = toDateKey(r.slate_date);
       if (!byDate[dateKey]) {
-        byDate[dateKey] = { date: dateKey, winTotal: 0, winCorrect: 0, runsTotal: 0, runsCorrect: 0 };
+        byDate[dateKey] = { date: dateKey, winTotal: 0, winCorrect: 0, runsTotal: 0, runsCorrect: 0, games: [] };
       }
       if (r.win_correct !== null) {
         byDate[dateKey].winTotal += 1;
@@ -30,6 +30,19 @@ export async function GET() {
         byDate[dateKey].runsTotal += 1;
         if (r.runs_correct) byDate[dateKey].runsCorrect += 1;
       }
+      byDate[dateKey].games.push({
+        gamePk: r.game_pk,
+        homeTeam: r.home_team,
+        awayTeam: r.away_team,
+        homeZh: r.home_zh,
+        awayZh: r.away_zh,
+        recommended: r.recommended,
+        pred: r.pred_json,
+        homeScore: r.home_score,
+        awayScore: r.away_score,
+        winCorrect: r.win_correct,
+        runsCorrect: r.runs_correct,
+      });
     }
 
     const days = Object.values(byDate)

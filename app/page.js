@@ -396,7 +396,26 @@ function pctLabel(rate, total) {
   return `${Math.round(rate * 100)}%`;
 }
 
+function HistoryGameRow({ g }) {
+  const favoredZh = g.pred.homeProb >= 0.5 ? g.homeZh : g.awayZh;
+  const favPct = Math.round(Math.max(g.pred.homeProb, g.pred.awayProb) * 100);
+  const { line, isOver } = ouLine(g.pred);
+  return (
+    <div className="history-game-row">
+      <span className="history-game-matchup">
+        {g.recommended && <span className="badge badge-recommend" style={{ marginRight: "0.4rem" }}>推薦</span>}
+        {g.awayZh} @ {g.homeZh}
+      </span>
+      <span>獨贏 {favoredZh} {favPct}% <GradeMark correct={g.winCorrect} /></span>
+      <span>大小分 {isOver ? "大" : "小"}{line} <GradeMark correct={g.runsCorrect} /></span>
+      <span className="muted">{g.awayScore !== null ? `終場 ${g.awayScore}:${g.homeScore}` : "尚未完賽"}</span>
+    </div>
+  );
+}
+
 function HistoryTable({ data, status }) {
+  const [expandedDate, setExpandedDate] = useState(null);
+
   if (status === "loading" || status === "idle") {
     return <p className="muted" style={{ padding: "1.4rem 2rem" }}>正在讀取本季的預測紀錄…</p>;
   }
@@ -415,6 +434,7 @@ function HistoryTable({ data, status }) {
           （{data.recommended.correct}/{data.recommended.total} 場，本季累計）
         </span>
       </div>
+      <p className="muted" style={{ fontSize: "0.78rem", margin: "0 0 0.6rem" }}>點擊日期可展開查看當天賽事結果</p>
       <div className="standings-group">
         <table className="standings-table">
           <thead>
@@ -430,15 +450,28 @@ function HistoryTable({ data, status }) {
           </thead>
           <tbody>
             {data.days.map((d) => (
-              <tr key={d.date}>
-                <td className="mono">{d.date}</td>
-                <td>{d.winTotal}</td>
-                <td>{d.winCorrect}</td>
-                <td className="mono">{pctLabel(d.winRate, d.winTotal)}</td>
-                <td>{d.runsTotal}</td>
-                <td>{d.runsCorrect}</td>
-                <td className="mono">{pctLabel(d.runsRate, d.runsTotal)}</td>
-              </tr>
+              <React.Fragment key={d.date}>
+                <tr className="history-date-row" onClick={() => setExpandedDate(expandedDate === d.date ? null : d.date)}>
+                  <td className="mono">{expandedDate === d.date ? "▾ " : "▸ "}{d.date}</td>
+                  <td>{d.winTotal}</td>
+                  <td>{d.winCorrect}</td>
+                  <td className="mono">{pctLabel(d.winRate, d.winTotal)}</td>
+                  <td>{d.runsTotal}</td>
+                  <td>{d.runsCorrect}</td>
+                  <td className="mono">{pctLabel(d.runsRate, d.runsTotal)}</td>
+                </tr>
+                {expandedDate === d.date && (
+                  <tr>
+                    <td colSpan={7} style={{ padding: 0 }}>
+                      <div className="history-game-list">
+                        {d.games.map((g) => (
+                          <HistoryGameRow key={g.gamePk} g={g} />
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
             ))}
           </tbody>
         </table>
@@ -909,6 +942,20 @@ export default function MLBWinPredictor() {
           white-space: nowrap;
         }
         .standings-table tr:last-child td { border-bottom: none; }
+        .history-date-row { cursor: pointer; }
+        .history-date-row:hover { background: var(--bg); }
+        .history-game-list { background: var(--bg); padding: 0.8rem 1rem; display: flex; flex-direction: column; gap: 0.6rem; }
+        .history-game-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.4rem 1rem;
+          align-items: center;
+          font-size: 0.82rem;
+          padding-bottom: 0.6rem;
+          border-bottom: 1px dashed var(--line);
+        }
+        .history-game-row:last-child { border-bottom: none; padding-bottom: 0; }
+        .history-game-matchup { font-family: 'Oswald', sans-serif; font-weight: 700; min-width: 140px; }
         .muted { color: var(--muted); }
         .mono { font-family: 'IBM Plex Mono', monospace; }
         .pos { color: #1B7A43; font-family: 'IBM Plex Mono', monospace; }
