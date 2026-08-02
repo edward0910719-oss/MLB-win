@@ -484,6 +484,7 @@ export async function GET() {
             runsHigh: freshPredByGamePk[g.gamePk].runs.high,
             recommended: top3GamePks.has(g.gamePk),
             pred: freshPredByGamePk[g.gamePk],
+            gameDateIso: g.gameDateIso,
           }).catch(() => {})
         )
     );

@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
 import { getAllPredictions } from "@/lib/db";
 
-function toDateKey(slateDate) {
-  // The driver parses a DATE column into a JS Date at *local* midnight for that
-  // calendar date. Reading it back with local getters (not toISOString's UTC ones)
-  // reverses that consistently, regardless of which timezone this process runs in.
-  const d = new Date(slateDate);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+// Groups by the Taiwan calendar day the game actually started on, not the US ET
+// schedule date stored in slate_date — those two dates commonly differ, since an
+// evening ET game lands as early-morning-to-noon the *next* day in Taiwan. Falls back
+// to locked_at (never null) for rows locked before game_date_iso started being stored.
+function toTaiwanDateKey(timestamp) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(timestamp));
 }
 
 export async function GET() {
@@ -18,7 +20,7 @@ export async function GET() {
 
     const byDate = {};
     for (const r of rows) {
-      const dateKey = toDateKey(r.slate_date);
+      const dateKey = toTaiwanDateKey(r.game_date_iso || r.locked_at);
       if (!byDate[dateKey]) {
         byDate[dateKey] = { date: dateKey, winTotal: 0, winCorrect: 0, runsTotal: 0, runsCorrect: 0, games: [] };
       }
