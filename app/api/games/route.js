@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { TEAM_META } from "@/lib/teamMeta";
 import { predictGame, ouLine } from "@/lib/predict";
-import { lockPrediction, getLockedPredictions, gradeResult } from "@/lib/db";
+import { lockPrediction, getLockedPredictions, gradeResult, getManualRecommendations } from "@/lib/db";
 
 // predictions stop updating once a game is within this many minutes of first pitch
 const PREDICTION_LOCK_MINUTES = 5;
@@ -461,12 +461,14 @@ export async function GET() {
       games.map((g) => [g.gamePk, lockedByGamePk[g.gamePk]?.pred_json ?? freshPredByGamePk[g.gamePk]])
     );
 
-    const top3GamePks = new Set(
-      [...games]
-        .sort((a, b) => Math.abs(predByGamePk[b.gamePk].homeProb - 0.5) - Math.abs(predByGamePk[a.gamePk].homeProb - 0.5))
-        .slice(0, 3)
-        .map((g) => g.gamePk)
-    );
+    // "推薦" is set manually via the password-protected panel (not auto-picked) — see
+    // /api/admin/recommendations. Empty by default until something's been chosen for the day.
+    let manualRecGamePks = new Set();
+    try {
+      manualRecGamePks = new Set(await getManualRecommendations(etDate));
+    } catch {
+      // DB unreachable — no recommendations shown rather than breaking the page
+    }
 
     await Promise.all(
       games
@@ -482,7 +484,7 @@ export async function GET() {
             homeProb: freshPredByGamePk[g.gamePk].homeProb,
             runsLow: freshPredByGamePk[g.gamePk].runs.low,
             runsHigh: freshPredByGamePk[g.gamePk].runs.high,
-            recommended: top3GamePks.has(g.gamePk),
+            recommended: manualRecGamePks.has(g.gamePk),
             pred: freshPredByGamePk[g.gamePk],
             gameDateIso: g.gameDateIso,
           }).catch(() => {})
@@ -510,7 +512,7 @@ export async function GET() {
     const gamesWithPred = games.map((g) => ({
       ...g,
       pred: predByGamePk[g.gamePk],
-      recommended: lockedByGamePk[g.gamePk]?.recommended ?? top3GamePks.has(g.gamePk),
+      recommended: lockedByGamePk[g.gamePk]?.recommended ?? manualRecGamePks.has(g.gamePk),
     }));
 
     return NextResponse.json({
