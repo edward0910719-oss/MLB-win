@@ -454,6 +454,18 @@ function HistoryTable({ data, status }) {
             </tr>
           </thead>
           <tbody>
+            <tr className="history-totals-row">
+              <td className="mono">本季累計</td>
+              <td>{data.totals.winTotal}</td>
+              <td>{data.totals.winCorrect}</td>
+              <td className="mono">{pctLabel(data.totals.winRate, data.totals.winTotal)}</td>
+              <td>{data.totals.runsTotal}</td>
+              <td>{data.totals.runsCorrect}</td>
+              <td className="mono">{pctLabel(data.totals.runsRate, data.totals.runsTotal)}</td>
+              <td>{data.totals.recTotal}</td>
+              <td>{data.totals.recCorrect}</td>
+              <td className="mono">{pctLabel(data.totals.recRate, data.totals.recTotal)}</td>
+            </tr>
             {data.days.map((d) => (
               <React.Fragment key={d.date}>
                 <tr className="history-date-row" onClick={() => setExpandedDate(expandedDate === d.date ? null : d.date)}>
@@ -1068,6 +1080,8 @@ export default function MLBWinPredictor() {
         .standings-table tr:last-child td { border-bottom: none; }
         .history-date-row { cursor: pointer; }
         .history-date-row:hover { background: var(--bg); }
+        .history-totals-row { background: var(--field); color: #fff; font-weight: 700; }
+        .history-totals-row td { border-bottom: none; }
         .history-game-list { background: var(--bg); padding: 0.8rem 1rem; display: flex; flex-direction: column; gap: 0.6rem; }
         .history-game-row {
           display: flex;

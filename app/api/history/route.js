@@ -69,7 +69,20 @@ export async function GET() {
       }))
       .sort((a, b) => (a.date < b.date ? 1 : -1));
 
-    return NextResponse.json({ days });
+    const sum = (key) => days.reduce((s, d) => s + d[key], 0);
+    const totals = {
+      winTotal: sum("winTotal"),
+      winCorrect: sum("winCorrect"),
+      runsTotal: sum("runsTotal"),
+      runsCorrect: sum("runsCorrect"),
+      recTotal: sum("recTotal"),
+      recCorrect: sum("recCorrect"),
+    };
+    totals.winRate = totals.winTotal > 0 ? totals.winCorrect / totals.winTotal : null;
+    totals.runsRate = totals.runsTotal > 0 ? totals.runsCorrect / totals.runsTotal : null;
+    totals.recRate = totals.recTotal > 0 ? totals.recCorrect / totals.recTotal : null;
+
+    return NextResponse.json({ days, totals });
   } catch (err) {
     return NextResponse.json(
       { error: "無法取得歷史預測資料，請稍後再試。", detail: String(err?.message || err) },
