@@ -439,7 +439,7 @@ function HistoryTable({ data, status }) {
         <table className="standings-table">
           <thead>
             <tr>
-              <th>日期</th>
+              <th>比賽日</th>
               <th>獨贏預測場次</th>
               <th>獨贏正確</th>
               <th>獨贏成功率</th>
