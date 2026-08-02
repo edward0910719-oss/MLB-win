@@ -436,12 +436,6 @@ function HistoryTable({ data, status }) {
 
   return (
     <div className="standings-wrap">
-      <div className="stat-pill-row" style={{ marginBottom: "1rem" }}>
-        <span className="stat-pill">
-          推薦場次獨贏成功率 <strong>{pctLabel(data.recommended.rate, data.recommended.total)}</strong>
-          （{data.recommended.correct}/{data.recommended.total} 場，本季累計）
-        </span>
-      </div>
       <p className="muted" style={{ fontSize: "0.78rem", margin: "0 0 0.6rem" }}>點擊日期可展開查看當天賽事結果</p>
       <div className="standings-group">
         <table className="standings-table">
@@ -454,6 +448,9 @@ function HistoryTable({ data, status }) {
               <th>大小分預測場次</th>
               <th>大小分正確</th>
               <th>大小分成功率</th>
+              <th>推薦場次</th>
+              <th>推薦正確</th>
+              <th>推薦成功率</th>
             </tr>
           </thead>
           <tbody>
@@ -467,10 +464,13 @@ function HistoryTable({ data, status }) {
                   <td>{d.runsTotal}</td>
                   <td>{d.runsCorrect}</td>
                   <td className="mono">{pctLabel(d.runsRate, d.runsTotal)}</td>
+                  <td>{d.recTotal}</td>
+                  <td>{d.recCorrect}</td>
+                  <td className="mono">{pctLabel(d.recRate, d.recTotal)}</td>
                 </tr>
                 {expandedDate === d.date && (
                   <tr>
-                    <td colSpan={7} style={{ padding: 0 }}>
+                    <td colSpan={10} style={{ padding: 0 }}>
                       <div className="history-game-list">
                         {d.games.map((g) => (
                           <HistoryGameRow key={g.gamePk} g={g} />

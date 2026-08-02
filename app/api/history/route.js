@@ -22,11 +22,24 @@ export async function GET() {
     for (const r of rows) {
       const dateKey = toTaiwanDateKey(r.game_date_iso || r.locked_at);
       if (!byDate[dateKey]) {
-        byDate[dateKey] = { date: dateKey, winTotal: 0, winCorrect: 0, runsTotal: 0, runsCorrect: 0, games: [] };
+        byDate[dateKey] = {
+          date: dateKey,
+          winTotal: 0,
+          winCorrect: 0,
+          runsTotal: 0,
+          runsCorrect: 0,
+          recTotal: 0,
+          recCorrect: 0,
+          games: [],
+        };
       }
       if (r.win_correct !== null) {
         byDate[dateKey].winTotal += 1;
         if (r.win_correct) byDate[dateKey].winCorrect += 1;
+        if (r.recommended) {
+          byDate[dateKey].recTotal += 1;
+          if (r.win_correct) byDate[dateKey].recCorrect += 1;
+        }
       }
       if (r.runs_correct !== null) {
         byDate[dateKey].runsTotal += 1;
@@ -52,20 +65,11 @@ export async function GET() {
         ...d,
         winRate: d.winTotal > 0 ? d.winCorrect / d.winTotal : null,
         runsRate: d.runsTotal > 0 ? d.runsCorrect / d.runsTotal : null,
+        recRate: d.recTotal > 0 ? d.recCorrect / d.recTotal : null,
       }))
       .sort((a, b) => (a.date < b.date ? 1 : -1));
 
-    const recommendedRows = rows.filter((r) => r.recommended && r.win_correct !== null);
-    const recommendedCorrect = recommendedRows.filter((r) => r.win_correct).length;
-
-    return NextResponse.json({
-      days,
-      recommended: {
-        total: recommendedRows.length,
-        correct: recommendedCorrect,
-        rate: recommendedRows.length > 0 ? recommendedCorrect / recommendedRows.length : null,
-      },
-    });
+    return NextResponse.json({ days });
   } catch (err) {
     return NextResponse.json(
       { error: "無法取得歷史預測資料，請稍後再試。", detail: String(err?.message || err) },
