@@ -438,7 +438,7 @@ function HistoryTable({ data, status }) {
     <div className="standings-wrap">
       <p className="muted" style={{ fontSize: "0.78rem", margin: "0 0 0.6rem" }}>點擊日期可展開查看當天賽事結果</p>
       <div className="standings-group">
-        <table className="standings-table">
+        <table className="standings-table history-table">
           <thead>
             <tr>
               <th>比賽日</th>
@@ -1082,6 +1082,18 @@ export default function MLBWinPredictor() {
         .history-date-row:hover { background: var(--bg); }
         .history-totals-row { background: var(--field); color: #fff; font-weight: 700; }
         .history-totals-row td { border-bottom: none; }
+        .history-table th:nth-child(4),
+        .history-table td:nth-child(4),
+        .history-table th:nth-child(7),
+        .history-table td:nth-child(7) {
+          border-right: 1px solid var(--line);
+        }
+        .history-totals-row th:nth-child(4),
+        .history-totals-row td:nth-child(4),
+        .history-totals-row th:nth-child(7),
+        .history-totals-row td:nth-child(7) {
+          border-right: 1px solid rgba(255,255,255,0.3);
+        }
         .history-game-list { background: var(--bg); padding: 0.8rem 1rem; display: flex; flex-direction: column; gap: 0.6rem; }
         .history-game-row {
           display: flex;
