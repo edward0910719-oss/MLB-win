@@ -273,15 +273,18 @@ export async function GET() {
       }
     }
 
-    // ---- confirmed starting lineup hitters' season OPS, fetched in one bulk call ----
+    // ---- confirmed starting lineup hitters' last-10-games OPS (their own season OPS as a
+    // per-player fallback for anyone without 10 games yet — call-ups, injury returns, etc.),
+    // fetched in one bulk call ----
     const hitterOpsMap = {};
     if (hitterIds.size > 0) {
       const hitters = await fetchJson(
-        `${MLB_API}/people?personIds=${[...hitterIds].join(",")}&hydrate=stats(group=[hitting],type=[season],season=${season})`
+        `${MLB_API}/people?personIds=${[...hitterIds].join(",")}&hydrate=stats(group=[hitting],type=[lastXGames,season],limit=10,season=${season})`
       );
       for (const person of hitters.people || []) {
-        const split = person.stats?.[0]?.splits?.[0];
-        const ops = split ? parseFloat(split.stat.ops) : NaN;
+        const last10 = person.stats?.find((s) => s.type?.displayName === "lastXGames")?.splits?.[0];
+        const seasonStat = person.stats?.find((s) => s.type?.displayName === "season")?.splits?.[0];
+        const ops = parseFloat(last10?.stat?.ops ?? seasonStat?.stat?.ops);
         if (!Number.isNaN(ops)) hitterOpsMap[person.id] = ops;
       }
     }
