@@ -46,6 +46,19 @@ function toMLBDateParam(date) {
   return `${mm}/${dd}/${date.getUTCFullYear()}`;
 }
 
+// Taiwan has no DST (fixed UTC+8), so this fixed-offset arithmetic is safe — unlike the
+// ET calculations above, which go through Intl.DateTimeFormat because ET does observe DST.
+function secondsUntilNextTaiwan7pm(now) {
+  const TAIWAN_OFFSET_MS = 8 * 60 * 60 * 1000;
+  const taiwanMs = now.getTime() + TAIWAN_OFFSET_MS;
+  const taiwanDate = new Date(taiwanMs);
+  const y = taiwanDate.getUTCFullYear(), m = taiwanDate.getUTCMonth(), d = taiwanDate.getUTCDate();
+  let next7pmTaiwanMs = Date.UTC(y, m, d, 19, 0, 0);
+  if (taiwanMs >= next7pmTaiwanMs) next7pmTaiwanMs = Date.UTC(y, m, d + 1, 19, 0, 0);
+  const next7pmRealUtcMs = next7pmTaiwanMs - TAIWAN_OFFSET_MS;
+  return Math.max(60, Math.round((next7pmRealUtcMs - now.getTime()) / 1000));
+}
+
 function shortPitcherName(fullName) {
   if (!fullName) return "先發未公布";
   const parts = fullName.trim().split(/\s+/);
@@ -54,8 +67,8 @@ function shortPitcherName(fullName) {
   return `${parts[0][0]}. ${last}`;
 }
 
-async function fetchJson(url) {
-  const res = await fetch(url, { next: { revalidate: REVALIDATE_SECONDS } });
+async function fetchJson(url, revalidateSeconds = REVALIDATE_SECONDS) {
+  const res = await fetch(url, { next: { revalidate: revalidateSeconds } });
   if (!res.ok) {
     throw new Error(`MLB Stats API ${res.status} for ${url}`);
   }
@@ -107,7 +120,15 @@ export async function GET() {
     const yesterday = etDateString(new Date(now.getTime() - 24 * 60 * 60 * 1000));
     const twoDaysAgo = etDateString(new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000));
 
-    const [teamsJson, scheduleJson, standingsJson, seasonPitchingJson, recentPitchingJson, seasonHittingJson, recentGamesJson] =
+    // anchored to etDate (stable across a whole 7pm-to-7pm Taiwan cycle) rather than the
+    // live `now`, so this call's URL — and therefore its cache entry — stays identical for
+    // the whole cycle instead of drifting every request
+    const slateAnchor = new Date(`${etDate}T00:00:00Z`);
+    const recentHittingEndParam = toMLBDateParam(slateAnchor);
+    const recentHittingStartParam = toMLBDateParam(new Date(slateAnchor.getTime() - 10 * 24 * 60 * 60 * 1000));
+    const secondsUntil7pm = secondsUntilNextTaiwan7pm(now);
+
+    const [teamsJson, scheduleJson, standingsJson, seasonPitchingJson, recentPitchingJson, seasonHittingJson, recentGamesJson, recentHittingJson] =
       await Promise.all([
         fetchJson(`${MLB_API}/teams?sportId=1&activeStatus=Y`),
         fetchJson(`${MLB_API}/schedule?sportId=1&date=${etDate}&hydrate=team,probablePitcher,lineups,linescore`),
@@ -118,6 +139,12 @@ export async function GET() {
         ),
         fetchJson(`${MLB_API}/teams/stats?stats=season&group=hitting&season=${season}&sportIds=1`),
         fetchJson(`${MLB_API}/schedule?sportId=1&startDate=${twoDaysAgo}&endDate=${yesterday}&hydrate=linescore`),
+        // 打線攻擊力(OPS) fallback: last-10-days team hitting, fixed until the next 19:00
+        // Taiwan slate flip instead of the usual 90s revalidate
+        fetchJson(
+          `${MLB_API}/teams/stats?stats=byDateRange&group=hitting&season=${season}&sportIds=1&startDate=${recentHittingStartParam}&endDate=${recentHittingEndParam}`,
+          secondsUntil7pm
+        ),
       ]);
 
     // ---- bullpen fatigue: teams that played an extra-inning game in the last 2 days ----
@@ -171,10 +198,18 @@ export async function GET() {
       recentEraMap[split.team.id] = parseFloat(split.stat.era);
     }
 
-    // ---- season OPS per team, used both as a display stat and as the lineup-strength baseline: id -> ops ----
+    // ---- season OPS per team, used both as a display stat and as the lineup-strength
+    // ratio's denominator: id -> ops ----
     const teamOpsMap = {};
     for (const split of seasonHittingJson.stats?.[0]?.splits || []) {
       teamOpsMap[split.team.id] = parseFloat(split.stat.ops);
+    }
+
+    // ---- last-10-days team OPS, used as the 打線攻擊力(OPS) fallback before a lineup is
+    // confirmed — refreshed once per 19:00 Taiwan cycle rather than every request: id -> ops ----
+    const recentOpsMap = {};
+    for (const split of recentHittingJson.stats?.[0]?.splits || []) {
+      recentOpsMap[split.team.id] = parseFloat(split.stat.ops);
     }
 
     // ---- today's games ----
@@ -251,14 +286,16 @@ export async function GET() {
       }
     }
 
-    // average OPS of the confirmed starting lineup; falls back to the team's season OPS
-    // when MLB hasn't posted a lineup for this game yet (typically until ~1-2 hours before first pitch)
+    // average OPS of the confirmed starting lineup; falls back to the team's last-10-days
+    // OPS (more form-sensitive than a season average, and symmetric with how bp10 already
+    // uses recent pitching) when MLB hasn't posted a lineup yet (typically until ~1-2
+    // hours before first pitch)
     function lineupOps(teamId, players) {
       const opsValues = (players || []).map((p) => hitterOpsMap[p.id]).filter((v) => v !== undefined);
       if (opsValues.length >= 5) {
         return { ops: opsValues.reduce((s, v) => s + v, 0) / opsValues.length, confirmed: true };
       }
-      return { ops: teamOpsMap[teamId] ?? 0.7, confirmed: false };
+      return { ops: recentOpsMap[teamId] ?? teamOpsMap[teamId] ?? 0.7, confirmed: false };
     }
 
     // ---- classify which injuries are actually significant (rotation starter / regular
