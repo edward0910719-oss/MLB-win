@@ -258,6 +258,32 @@ function GameCard({ g, onOpen, teamMap, isAdmin, isSelected, onToggleSelect }) {
   );
 }
 
+// reference-only display: pitch counts don't get "worse" beyond casual reading past a
+// normal 3-day workload, so the bar scale caps at a fixed 30 pitches rather than scaling
+// to whoever happens to be the busiest arm shown
+const BULLPEN_BAR_MAX_PITCHES = 30;
+
+function BullpenColumn({ team, list, color }) {
+  return (
+    <div className="bullpen-col">
+      <p className="bullpen-col-heading">{team.zh}</p>
+      {list.length === 0 && <p className="bullpen-empty">近3日無出賽紀錄</p>}
+      {list.map((p, i) => {
+        const pct = Math.min(100, (p.pitches / BULLPEN_BAR_MAX_PITCHES) * 100);
+        return (
+          <div className="bullpen-row" key={i}>
+            <span className="bullpen-name">{p.hand ? `(${p.hand}) ` : ""}{p.name}</span>
+            <span className="bullpen-bar-track">
+              <span className="bullpen-bar-fill" style={{ width: `${pct}%`, background: color }} />
+            </span>
+            <span className="bullpen-pitches">{p.pitches}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function GameDetail({ g, onClose, teamMap }) {
   const home = teamMap[g.home];
   const away = teamMap[g.away];
@@ -319,6 +345,16 @@ function GameDetail({ g, onClose, teamMap }) {
             );
           })}
         </div>
+
+        {g.bullpen && (g.bullpen.home.length > 0 || g.bullpen.away.length > 0) && (
+          <div className="bullpen-box">
+            <h4 className="factor-heading">牛棚可用性（近3日用球數，僅供參考）</h4>
+            <div className="bullpen-columns">
+              <BullpenColumn team={away} list={g.bullpen.away} color={awayColor} />
+              <BullpenColumn team={home} list={g.bullpen.home} color={home.color} />
+            </div>
+          </div>
+        )}
 
         {(home.injuries.length > 0 || away.injuries.length > 0) && (
           <div className="injury-box">
@@ -1047,6 +1083,15 @@ export default function MLBWinPredictor() {
         .factor-note { font-size: 0.72rem; color: var(--muted); font-family: 'IBM Plex Mono', monospace; }
 
         .injury-box p { font-size: 0.82rem; margin: 0.2rem 0; color: var(--clay); }
+
+        .bullpen-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.2rem; }
+        .bullpen-col-heading { font-size: 0.8rem; font-weight: 700; margin: 0 0 0.4rem; }
+        .bullpen-row { display: grid; grid-template-columns: 78px 1fr 24px; align-items: center; gap: 0.4rem; margin-bottom: 0.35rem; }
+        .bullpen-name { font-size: 0.7rem; font-family: 'IBM Plex Mono', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .bullpen-bar-track { height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; }
+        .bullpen-bar-fill { display: block; height: 100%; }
+        .bullpen-pitches { font-size: 0.72rem; font-family: 'IBM Plex Mono', monospace; text-align: right; color: var(--muted); }
+        .bullpen-empty { font-size: 0.72rem; color: var(--muted); }
 
         .standings-wrap { padding: 1.4rem 2rem; max-width: 1200px; margin: 0 auto; }
         .standings-group { margin-bottom: 1.6rem; overflow-x: auto; }

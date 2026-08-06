@@ -119,6 +119,7 @@ export async function GET() {
 
     const yesterday = etDateString(new Date(now.getTime() - 24 * 60 * 60 * 1000));
     const twoDaysAgo = etDateString(new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000));
+    const threeDaysAgo = etDateString(new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000));
 
     // anchored to etDate (stable across a whole 7pm-to-7pm Taiwan cycle) rather than the
     // live `now`, so this call's URL — and therefore its cache entry — stays identical for
@@ -128,7 +129,17 @@ export async function GET() {
     const recentHittingStartParam = toMLBDateParam(new Date(slateAnchor.getTime() - 10 * 24 * 60 * 60 * 1000));
     const secondsUntil7pm = secondsUntilNextTaiwan7pm(now);
 
-    const [teamsJson, scheduleJson, standingsJson, seasonPitchingJson, recentPitchingJson, seasonHittingJson, recentGamesJson, recentHittingJson] =
+    const [
+      teamsJson,
+      scheduleJson,
+      standingsJson,
+      seasonPitchingJson,
+      recentPitchingJson,
+      seasonHittingJson,
+      recentGamesJson,
+      recentHittingJson,
+      bullpenScheduleJson,
+    ] =
       await Promise.all([
         fetchJson(`${MLB_API}/teams?sportId=1&activeStatus=Y`),
         fetchJson(`${MLB_API}/schedule?sportId=1&date=${etDate}&hydrate=team,probablePitcher,lineups,linescore`),
@@ -145,6 +156,9 @@ export async function GET() {
           `${MLB_API}/teams/stats?stats=byDateRange&group=hitting&season=${season}&sportIds=1&startDate=${recentHittingStartParam}&endDate=${recentHittingEndParam}`,
           secondsUntil7pm
         ),
+        // last-3-days league-wide schedule, used below to find each team's recent boxscores
+        // for the 牛棚可用性 (bullpen availability) reference list
+        fetchJson(`${MLB_API}/schedule?sportId=1&startDate=${threeDaysAgo}&endDate=${yesterday}&hydrate=team`),
       ]);
 
     // ---- bullpen fatigue: teams that played an extra-inning game in the last 2 days ----
@@ -228,6 +242,69 @@ export async function GET() {
       if (g.teams.away.probablePitcher) pitcherIds.add(g.teams.away.probablePitcher.id);
       for (const p of g.lineups?.homePlayers || []) hitterIds.add(p.id);
       for (const p of g.lineups?.awayPlayers || []) hitterIds.add(p.id);
+    }
+
+    // ---- 牛棚可用性 (bullpen availability): each playing team's relievers' cumulative
+    // pitch count over the last 3 days, for reference display only — kept out of the
+    // prediction model since which reliever the manager actually uses tonight depends on
+    // in-game leverage/score and can't be known ahead of first pitch ----
+    const bullpenGamesByTeam = {}; // teamId -> [{ gamePk, side }]
+    for (const day of bullpenScheduleJson.dates || []) {
+      for (const game of day.games || []) {
+        if (game.status?.abstractGameState !== "Final") continue;
+        const hId = game.teams.home.team.id;
+        const aId = game.teams.away.team.id;
+        if (gameTeamIds.has(hId)) (bullpenGamesByTeam[hId] ??= []).push({ gamePk: game.gamePk, side: "home" });
+        if (gameTeamIds.has(aId)) (bullpenGamesByTeam[aId] ??= []).push({ gamePk: game.gamePk, side: "away" });
+      }
+    }
+    const bullpenGamePks = new Set();
+    for (const entries of Object.values(bullpenGamesByTeam)) {
+      for (const e of entries) bullpenGamePks.add(e.gamePk);
+    }
+    const boxscoreByGamePk = {};
+    await Promise.all(
+      [...bullpenGamePks].map(async (pk) => {
+        try {
+          boxscoreByGamePk[pk] = await fetchJson(`${MLB_API}/game/${pk}/boxscore`);
+        } catch {
+          boxscoreByGamePk[pk] = null;
+        }
+      })
+    );
+    // teamId -> { playerId -> { name, pitches } }, relievers only (gamesStarted === 0)
+    const relieverTallyByTeam = {};
+    for (const [teamId, entries] of Object.entries(bullpenGamesByTeam)) {
+      const tally = {};
+      for (const { gamePk, side } of entries) {
+        const teamBox = boxscoreByGamePk[gamePk]?.teams?.[side];
+        if (!teamBox) continue;
+        for (const pid of teamBox.pitchers || []) {
+          const player = teamBox.players?.[`ID${pid}`];
+          const stat = player?.stats?.pitching;
+          if (!stat || stat.gamesStarted > 0 || !stat.pitchesThrown) continue;
+          if (!tally[pid]) tally[pid] = { name: player.person.fullName, pitches: 0 };
+          tally[pid].pitches += stat.pitchesThrown;
+        }
+      }
+      relieverTallyByTeam[teamId] = tally;
+    }
+    const relieverIds = new Set();
+    for (const tally of Object.values(relieverTallyByTeam)) {
+      for (const pid of Object.keys(tally)) relieverIds.add(pid);
+    }
+    const pitchHandMap = {};
+    if (relieverIds.size > 0) {
+      const people = await fetchJson(`${MLB_API}/people?personIds=${[...relieverIds].join(",")}`);
+      for (const p of people.people || []) {
+        pitchHandMap[p.id] = p.pitchHand?.code || "";
+      }
+    }
+    function bullpenList(teamId) {
+      const tally = relieverTallyByTeam[teamId] || {};
+      return Object.entries(tally)
+        .map(([pid, v]) => ({ name: shortPitcherName(v.name), hand: pitchHandMap[pid] || "", pitches: v.pitches }))
+        .sort((a, b) => b.pitches - a.pitches);
     }
 
     // ---- injuries: only fetched for teams actually playing today ----
@@ -489,6 +566,7 @@ export async function GET() {
           weatherTempF: weather.tempF,
           weatherRunFactor: weather.runFactor,
           h2h: h2hMap[`${homeId}-${awayId}`] || { homeWins: 0, awayWins: 0 },
+          bullpen: { home: bullpenList(homeId), away: bullpenList(awayId) },
           homeScore: typeof g.teams.home.score === "number" ? g.teams.home.score : null,
           awayScore: typeof g.teams.away.score === "number" ? g.teams.away.score : null,
           liveInning:
