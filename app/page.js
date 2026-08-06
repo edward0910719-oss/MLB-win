@@ -302,22 +302,22 @@ function GameDetail({ g, onClose, teamMap }) {
 
         <h4 className="factor-heading">預測因子拆解</h4>
         <div className="factor-list">
-          {g.pred.factors.map((f, i) => (
-            <div className="factor-row" key={i}>
-              <span className="factor-label">{f.label}</span>
-              <span className="factor-bar-track">
-                <span
-                  className="factor-bar-fill"
-                  style={{
-                    width: `${Math.min(100, Math.abs(f.value) * 220)}%`,
-                    marginLeft: f.value < 0 ? "auto" : 0,
-                    background: f.value >= 0 ? home.color : awayColor,
-                  }}
-                />
-              </span>
-              <span className="factor-note">{f.note}</span>
-            </div>
-          ))}
+          {g.pred.factors.map((f, i) => {
+            // full-width, two-segment bar (away left, home right) — same left/right
+            // convention as the win-probability bar above, so a longer segment on either
+            // side reads the same way in both places
+            const homePct = Math.min(100, Math.max(0, 50 + f.value * 110));
+            return (
+              <div className="factor-row" key={i}>
+                <span className="factor-label">{f.label}</span>
+                <span className="factor-bar-track">
+                  <span className="factor-bar-fill" style={{ width: `${100 - homePct}%`, background: awayColor }} />
+                  <span className="factor-bar-fill" style={{ width: `${homePct}%`, background: home.color }} />
+                </span>
+                <span className="factor-note">{f.note}</span>
+              </div>
+            );
+          })}
         </div>
 
         {(home.injuries.length > 0 || away.injuries.length > 0) && (
@@ -1040,11 +1040,10 @@ export default function MLBWinPredictor() {
           height: 8px;
           background: var(--line);
           border-radius: 999px;
-          display: block;
-          position: relative;
+          display: flex;
           overflow: hidden;
         }
-        .factor-bar-fill { display: block; height: 100%; border-radius: 999px; }
+        .factor-bar-fill { display: block; height: 100%; }
         .factor-note { font-size: 0.72rem; color: var(--muted); font-family: 'IBM Plex Mono', monospace; }
 
         .injury-box p { font-size: 0.82rem; margin: 0.2rem 0; color: var(--clay); }
