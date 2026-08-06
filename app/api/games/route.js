@@ -341,6 +341,42 @@ export async function GET() {
       ).length;
     }
 
+    // ---- head-to-head record this season (display-only — with MLB's unbalanced schedule
+    // most pairs only meet 2-6 times, too small a sample to feed into the win-probability
+    // model, but still useful as reference info) ----
+    const h2hPairs = new Map();
+    for (const g of rawGames) {
+      const homeId = g.teams.home.team.id;
+      const awayId = g.teams.away.team.id;
+      h2hPairs.set(`${homeId}-${awayId}`, { homeId, awayId });
+    }
+    const h2hMap = {};
+    await Promise.all(
+      [...h2hPairs.entries()].map(async ([key, { homeId, awayId }]) => {
+        try {
+          const json = await fetchJson(
+            `${MLB_API}/schedule?sportId=1&teamId=${homeId}&opponentId=${awayId}&season=${season}&gameType=R`
+          );
+          let homeWins = 0;
+          let awayWins = 0;
+          for (const day of json.dates || []) {
+            for (const game of day.games || []) {
+              if (game.status?.abstractGameState !== "Final") continue;
+              const hs = game.teams.home.score;
+              const as = game.teams.away.score;
+              if (typeof hs !== "number" || typeof as !== "number") continue;
+              const winnerId = hs > as ? game.teams.home.team.id : game.teams.away.team.id;
+              if (winnerId === homeId) homeWins++;
+              else if (winnerId === awayId) awayWins++;
+            }
+          }
+          h2hMap[key] = { homeWins, awayWins };
+        } catch {
+          h2hMap[key] = { homeWins: 0, awayWins: 0 };
+        }
+      })
+    );
+
     // ---- weather at each home park's coordinates, around first pitch (skipped for domes) ----
     const weatherMap = {};
     await Promise.all(
@@ -452,6 +488,7 @@ export async function GET() {
           awayBullpenFatigued: fatiguedTeamIds.has(awayId),
           weatherTempF: weather.tempF,
           weatherRunFactor: weather.runFactor,
+          h2h: h2hMap[`${homeId}-${awayId}`] || { homeWins: 0, awayWins: 0 },
           homeScore: typeof g.teams.home.score === "number" ? g.teams.home.score : null,
           awayScore: typeof g.teams.away.score === "number" ? g.teams.away.score : null,
           liveInning:
