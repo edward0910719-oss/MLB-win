@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { TEAM_META } from "@/lib/teamMeta";
 import { predictGame, ouLine } from "@/lib/predict";
-import { lockPrediction, getLockedPredictions, gradeResult, getManualRecommendations } from "@/lib/db";
+import { lockPrediction, getLockedPredictions, gradeResult, getManualRecommendations, getUngradedPredictions } from "@/lib/db";
 
 // predictions stop updating once a game is within this many minutes of first pitch
 const PREDICTION_LOCK_MINUTES = 5;
@@ -663,6 +663,39 @@ export async function GET() {
           return gradeResult(g.gamePk, etDate, g.homeScore, g.awayScore, winCorrect, runsCorrect).catch(() => {});
         })
     );
+
+    // ---- catch-up grading: predictions whose slate already flipped away (past the
+    // 19:00 Taiwan boundary) before anyone visited while it was still "current" would
+    // otherwise stay ungraded forever — the loop above only re-checks games belonging to
+    // *this* request's slate. Looks up every still-ungraded row from any slate and asks
+    // MLB directly for a final score. ----
+    try {
+      const currentSlateGamePks = new Set(games.map((g) => g.gamePk));
+      const staleRows = (await getUngradedPredictions()).filter((r) => !currentSlateGamePks.has(Number(r.game_pk)));
+      await Promise.all(
+        staleRows.map(async (row) => {
+          try {
+            const sched = await fetchJson(`${MLB_API}/schedule?gamePk=${row.game_pk}&sportId=1`);
+            const staleGame = sched.dates?.[0]?.games?.[0];
+            if (!staleGame || staleGame.status?.abstractGameState !== "Final") return;
+            const homeScore = staleGame.teams.home.score;
+            const awayScore = staleGame.teams.away.score;
+            if (typeof homeScore !== "number" || typeof awayScore !== "number") return;
+            const predictedHomeWin = row.home_prob >= 0.5;
+            const actualHomeWin = homeScore > awayScore;
+            const actualTotal = homeScore + awayScore;
+            const winCorrect = predictedHomeWin === actualHomeWin;
+            const { line, isOver } = ouLine(row.pred_json);
+            const runsCorrect = isOver ? actualTotal > line : actualTotal < line;
+            await gradeResult(row.game_pk, row.slate_date, homeScore, awayScore, winCorrect, runsCorrect);
+          } catch {
+            // best-effort — a single stuck row shouldn't block the page
+          }
+        })
+      );
+    } catch {
+      // DB unreachable — skip catch-up grading rather than breaking the page
+    }
 
     const gamesWithPred = games.map((g) => ({
       ...g,
