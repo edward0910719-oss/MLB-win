@@ -326,6 +326,8 @@ function GameDetail({ g, onClose, teamMap }) {
           </span>
         </div>
 
+        {g.pred.commentary && <p className="commentary-note">{g.pred.commentary}</p>}
+
         <h4 className="factor-heading">預測因子拆解</h4>
         <div className="factor-list">
           {g.pred.factors.map((f, i) => {
@@ -1053,6 +1055,17 @@ export default function MLBWinPredictor() {
         .close-btn {
           border: none; background: var(--line); border-radius: 50%;
           width: 28px; height: 28px; cursor: pointer; font-size: 0.85rem;
+        }
+
+        .commentary-note {
+          font-size: 0.82rem;
+          line-height: 1.55;
+          color: var(--ink);
+          background: var(--line);
+          border-left: 3px solid var(--clay);
+          border-radius: 6px;
+          padding: 0.6rem 0.8rem;
+          margin: 0.9rem 0 0.4rem;
         }
 
         .factor-heading {
