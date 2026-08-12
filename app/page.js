@@ -146,6 +146,16 @@ function formatAtBatLabel(atBat, isBatting) {
   return `投手 ${atBat.pitcher}${atBat.pitcherEra ? `（${atBat.pitcherEra} ERA）` : ""}`;
 }
 
+function BaseDiamond({ bases }) {
+  return (
+    <div className="base-diamond">
+      <span className={`base-marker base-2${bases.second ? " on" : ""}`} />
+      <span className={`base-marker base-3${bases.third ? " on" : ""}`} />
+      <span className={`base-marker base-1${bases.first ? " on" : ""}`} />
+    </div>
+  );
+}
+
 function LiveMatchup({ g, home, away, awayColor }) {
   const half = INNING_HALF_ZH[g.liveInning?.half] || "";
   const awayLabel =
@@ -175,7 +185,17 @@ function LiveMatchup({ g, home, away, awayColor }) {
         {g.timing.isFinal ? (
           <div className="live-inning-num">比賽結束</div>
         ) : (
-          g.liveInning && <div className="live-inning-num">{g.liveInning.number}局{half}</div>
+          <>
+            {g.liveInning && <div className="live-inning-num">{g.liveInning.number}局{half}</div>}
+            {g.liveAtBat && (
+              <>
+                <BaseDiamond bases={g.liveAtBat.bases} />
+                <div className="live-count">
+                  {g.liveAtBat.strikes}好{g.liveAtBat.balls}壞・{g.liveAtBat.outs}出局
+                </div>
+              </>
+            )}
+          </>
         )}
       </div>
       <div className="live-team">
@@ -951,6 +971,21 @@ export default function MLBWinPredictor() {
         .live-atbat { font-size: 0.68rem; color: var(--muted); margin-top: 0.3rem; }
         .live-inning { text-align: center; padding: 1.6rem 0.4rem 0; }
         .live-inning-num { font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 0.95rem; color: var(--ink); white-space: nowrap; }
+
+        .base-diamond { position: relative; width: 22px; height: 22px; margin: 0.5rem auto 0; }
+        .base-marker {
+          position: absolute;
+          width: 8px;
+          height: 8px;
+          background: var(--line);
+          border: 1px solid var(--muted);
+          transform: rotate(45deg);
+        }
+        .base-marker.on { background: var(--clay); border-color: var(--clay); }
+        .base-2 { top: 0; left: 50%; margin-left: -4px; }
+        .base-3 { top: 50%; left: 0; margin-top: -4px; }
+        .base-1 { top: 50%; right: 0; margin-top: -4px; }
+        .live-count { font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; color: var(--muted); margin-top: 0.35rem; white-space: nowrap; }
 
         .team-tag { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
         .team-tag.right { flex-direction: row-reverse; text-align: right; }

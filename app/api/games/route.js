@@ -582,6 +582,14 @@ export async function GET() {
                   batterAvg: liveBatterAvgMap[g.linescore.offense.batter?.id] ?? null,
                   pitcher: g.linescore.defense?.pitcher?.fullName || null,
                   pitcherEra: livePitcherEraMap[g.linescore.defense?.pitcher?.id] ?? null,
+                  balls: g.linescore.balls ?? 0,
+                  strikes: g.linescore.strikes ?? 0,
+                  outs: g.linescore.outs ?? 0,
+                  bases: {
+                    first: !!g.linescore.offense?.first,
+                    second: !!g.linescore.offense?.second,
+                    third: !!g.linescore.offense?.third,
+                  },
                 }
               : null,
           status: {
