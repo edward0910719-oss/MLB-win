@@ -327,6 +327,7 @@ function GameDetail({ g, onClose, teamMap }) {
         </div>
 
         {g.pred.commentary && <p className="commentary-note">{g.pred.commentary}</p>}
+        {g.pred.ouCommentary && <p className="commentary-note">{g.pred.ouCommentary}</p>}
 
         <h4 className="factor-heading">預測因子拆解</h4>
         <div className="factor-list">
