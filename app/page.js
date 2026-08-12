@@ -191,7 +191,7 @@ function LiveMatchup({ g, home, away, awayColor }) {
               <>
                 <BaseDiamond bases={g.liveAtBat.bases} />
                 <div className="live-count">
-                  {g.liveAtBat.strikes}好{g.liveAtBat.balls}壞・{g.liveAtBat.outs}出局
+                  {g.liveAtBat.balls}-{g.liveAtBat.strikes}・{g.liveAtBat.outs}出局
                 </div>
               </>
             )}
