@@ -722,8 +722,10 @@ export default function MLBWinPredictor() {
       const matchesDiv = division === "all" ? true : home.div === division || away.div === division;
       return matchesQuery && matchesDiv;
     });
-    // all games sorted by start time; "推薦" is now just a badge, not a sort key
-    return [...filtered].sort((a, b) => new Date(a.gameDateIso) - new Date(b.gameDateIso));
+    // sorted by predicted win probability (favored side), highest confidence first
+    return [...filtered].sort(
+      (a, b) => Math.max(b.pred.homeProb, b.pred.awayProb) - Math.max(a.pred.homeProb, a.pred.awayProb)
+    );
   }, [GAMES, query, division, teamMap]);
 
   return (
