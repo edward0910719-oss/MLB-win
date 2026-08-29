@@ -543,9 +543,11 @@ function HistoryTable({ data, status }) {
                   <tr>
                     <td colSpan={10} style={{ padding: 0 }}>
                       <div className="history-game-list">
-                        {d.games.map((g) => (
-                          <HistoryGameRow key={g.gamePk} g={g} />
-                        ))}
+                        {[...d.games]
+                          .sort((a, b) => Math.max(b.pred.homeProb, b.pred.awayProb) - Math.max(a.pred.homeProb, a.pred.awayProb))
+                          .map((g) => (
+                            <HistoryGameRow key={g.gamePk} g={g} />
+                          ))}
                       </div>
                     </td>
                   </tr>
