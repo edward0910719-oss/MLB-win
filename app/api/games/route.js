@@ -59,6 +59,20 @@ function secondsUntilNextTaiwan7pm(now) {
   return Math.max(60, Math.round((next7pmRealUtcMs - now.getTime()) / 1000));
 }
 
+// Taiwan-local midnight (00:00) of the calendar day a game's first pitch falls on, as a
+// real UTC instant — same fixed-offset technique as secondsUntilNextTaiwan7pm above.
+// Games in a slate mostly start between Taiwan 00:00 and ~11:00 the same day, so once
+// that day's midnight arrives the whole slate is already past this cutoff — freezing
+// every game's prediction at once instead of each one individually 5 minutes before its
+// own first pitch.
+function taiwanMidnightUtcMs(gameDateIso) {
+  const TAIWAN_OFFSET_MS = 8 * 60 * 60 * 1000;
+  const taiwanMs = new Date(gameDateIso).getTime() + TAIWAN_OFFSET_MS;
+  const taiwanDate = new Date(taiwanMs);
+  const y = taiwanDate.getUTCFullYear(), m = taiwanDate.getUTCMonth(), d = taiwanDate.getUTCDate();
+  return Date.UTC(y, m, d, 0, 0, 0) - TAIWAN_OFFSET_MS;
+}
+
 function shortPitcherName(fullName) {
   if (!fullName) return "先發未公布";
   const parts = fullName.trim().split(/\s+/);
@@ -607,7 +621,13 @@ export async function GET() {
 
     function isGameLocked(g) {
       const lockMs = new Date(g.gameDateIso).getTime() - PREDICTION_LOCK_MINUTES * 60 * 1000;
-      return g.status.abstract === "Live" || g.status.abstract === "Final" || Date.now() >= lockMs;
+      const midnightMs = taiwanMidnightUtcMs(g.gameDateIso);
+      return (
+        g.status.abstract === "Live" ||
+        g.status.abstract === "Final" ||
+        Date.now() >= lockMs ||
+        Date.now() >= midnightMs
+      );
     }
 
     let lockedByGamePk = {};
