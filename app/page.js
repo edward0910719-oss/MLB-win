@@ -210,23 +210,16 @@ function LiveMatchup({ g, home, away, awayColor }) {
   );
 }
 
-function GameCard({ g, onOpen, teamMap, isAdmin, isSelected, onToggleSelect }) {
+function GameCard({ g, onOpen, teamMap }) {
   const home = teamMap[g.home];
   const away = teamMap[g.away];
   const awayColor = getAwayDisplayColor(home, away);
   const favored = g.pred.homeProb >= 0.5 ? home : away;
   const favPct = Math.max(g.pred.homeProb, g.pred.awayProb);
   const grade = getGrade(g);
-  const canSelect = isAdmin && !g.timing.isLive && !g.timing.isFinal;
 
   return (
-    <div className="game-card-wrapper">
-      {canSelect && (
-        <label className="game-card-checkbox" onClick={(e) => e.stopPropagation()}>
-          <input type="checkbox" checked={isSelected} onChange={() => onToggleSelect(g.gamePk)} />
-        </label>
-      )}
-      <button className="game-card" onClick={() => onOpen(g)}>
+    <button className="game-card" onClick={() => onOpen(g)}>
       <div className="game-card-top">
         <span className="game-time">🕒 {g.twTime}（台灣時間）</span>
       </div>
@@ -273,8 +266,7 @@ function GameCard({ g, onOpen, teamMap, isAdmin, isSelected, onToggleSelect }) {
         </span>
         <span>{favored.zh} 贏球差距 &gt;1.5分機率 <strong>{Math.round(g.pred.marginProb * 100)}%</strong></span>
       </div>
-      </button>
-    </div>
+    </button>
   );
 }
 
@@ -578,8 +570,6 @@ export default function MLBWinPredictor() {
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
   const [adminLoginError, setAdminLoginError] = useState("");
-  const [selectedGamePks, setSelectedGamePks] = useState(new Set());
-  const [saveRecStatus, setSaveRecStatus] = useState("idle"); // idle | saving | saved | error
 
   useEffect(() => {
     fetch("/api/admin/login")
@@ -609,15 +599,6 @@ export default function MLBWinPredictor() {
   const handleAdminLogout = useCallback(async () => {
     await fetch("/api/admin/login", { method: "DELETE" }).catch(() => {});
     setIsAdmin(false);
-  }, []);
-
-  const toggleGamePk = useCallback((gamePk) => {
-    setSelectedGamePks((prev) => {
-      const next = new Set(prev);
-      if (next.has(gamePk)) next.delete(gamePk);
-      else next.add(gamePk);
-      return next;
-    });
   }, []);
 
   useEffect(() => {
@@ -683,28 +664,6 @@ export default function MLBWinPredictor() {
         timing: { isLive: g.status.abstract === "Live", isFinal: g.status.abstract === "Final" },
       }));
   }, [rawGames, teamMap]);
-
-  useEffect(() => {
-    if (isAdmin && GAMES.length) {
-      setSelectedGamePks(new Set(GAMES.filter((g) => g.recommended).map((g) => g.gamePk)));
-    }
-  }, [isAdmin, GAMES]);
-
-  const handleSaveRecommendations = useCallback(async () => {
-    setSaveRecStatus("saving");
-    try {
-      const res = await fetch("/api/admin/recommendations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slateDate: data?.date, gamePks: [...selectedGamePks] }),
-      });
-      if (!res.ok) throw new Error();
-      setSaveRecStatus("saved");
-      loadGames();
-    } catch {
-      setSaveRecStatus("error");
-    }
-  }, [data?.date, selectedGamePks, loadGames]);
 
   const filteredGames = useMemo(() => {
     const filtered = GAMES.filter((g) => {
@@ -893,35 +852,6 @@ export default function MLBWinPredictor() {
           border-color: var(--clay);
         }
         .game-card:focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; }
-
-        .game-card-wrapper { position: relative; }
-        .game-card-wrapper .game-card { display: block; width: 100%; }
-        .game-card-checkbox {
-          position: absolute;
-          top: 0.7rem;
-          right: 0.7rem;
-          z-index: 2;
-          background: #fff;
-          border: 1px solid var(--line);
-          border-radius: 6px;
-          padding: 0.2rem;
-          display: flex;
-          cursor: pointer;
-        }
-        .game-card-checkbox input { width: 18px; height: 18px; cursor: pointer; margin: 0; }
-
-        .admin-rec-toolbar {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 0.7rem;
-          padding: 0.6rem 2rem;
-          max-width: 1200px;
-          margin: 0 auto;
-          font-size: 0.82rem;
-          color: var(--muted);
-        }
-        .admin-save-ok { color: #1B7A43; font-weight: 700; }
 
         .game-card-top {
           display: flex;
@@ -1319,36 +1249,16 @@ export default function MLBWinPredictor() {
           </div>
 
           {view === "games" ? (
-            <>
-              {isAdmin && (
-                <div className="admin-rec-toolbar">
-                  <span>管理模式：勾選要標記「推薦」的比賽（僅限尚未開賽），已選 {selectedGamePks.size} 場</span>
-                  <button className="hero-admin-link" onClick={handleSaveRecommendations} disabled={saveRecStatus === "saving"}>
-                    {saveRecStatus === "saving" ? "儲存中…" : "確定"}
-                  </button>
-                  {saveRecStatus === "saved" && <span className="admin-save-ok">已儲存</span>}
-                  {saveRecStatus === "error" && <span className="admin-login-error">儲存失敗，請再試一次</span>}
-                </div>
+            <div className="games-grid">
+              {filteredGames.length === 0 && (
+                <p className="muted" style={{ gridColumn: "1/-1" }}>
+                  {GAMES.length === 0 ? "今天沒有安排 MLB 賽事。" : "找不到符合條件的比賽，換個關鍵字試試。"}
+                </p>
               )}
-              <div className="games-grid">
-                {filteredGames.length === 0 && (
-                  <p className="muted" style={{ gridColumn: "1/-1" }}>
-                    {GAMES.length === 0 ? "今天沒有安排 MLB 賽事。" : "找不到符合條件的比賽，換個關鍵字試試。"}
-                  </p>
-                )}
-                {filteredGames.map((g) => (
-                  <GameCard
-                    key={g.gamePk}
-                    g={g}
-                    onOpen={setOpenGame}
-                    teamMap={teamMap}
-                    isAdmin={isAdmin}
-                    isSelected={selectedGamePks.has(g.gamePk)}
-                    onToggleSelect={toggleGamePk}
-                  />
-                ))}
-              </div>
-            </>
+              {filteredGames.map((g) => (
+                <GameCard key={g.gamePk} g={g} onOpen={setOpenGame} teamMap={teamMap} />
+              ))}
+            </div>
           ) : view === "standings" ? (
             <StandingsTable teams={teams} query={query} />
           ) : (

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAllPredictions } from "@/lib/db";
+import { isRecommended } from "@/lib/predict";
 
 // Groups by the Taiwan calendar day the game actually started on, not the US ET
 // schedule date stored in slate_date — those two dates commonly differ, since an
@@ -36,7 +37,9 @@ export async function GET() {
       if (r.win_correct !== null) {
         byDate[dateKey].winTotal += 1;
         if (r.win_correct) byDate[dateKey].winCorrect += 1;
-        if (r.recommended) {
+        // recomputed from home_prob (rather than trusting the stored recommended column)
+        // so past games locked before the 70% rule existed are judged by the same rule
+        if (isRecommended(r.home_prob)) {
           byDate[dateKey].recTotal += 1;
           if (r.win_correct) byDate[dateKey].recCorrect += 1;
         }
@@ -51,7 +54,7 @@ export async function GET() {
         awayTeam: r.away_team,
         homeZh: r.home_zh,
         awayZh: r.away_zh,
-        recommended: r.recommended,
+        recommended: isRecommended(r.home_prob),
         pred: r.pred_json,
         homeScore: r.home_score,
         awayScore: r.away_score,

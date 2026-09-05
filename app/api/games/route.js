@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { TEAM_META } from "@/lib/teamMeta";
-import { predictGame, ouLine } from "@/lib/predict";
-import { lockPrediction, getLockedPredictions, gradeResult, getManualRecommendations, getUngradedPredictions } from "@/lib/db";
+import { predictGame, ouLine, isRecommended } from "@/lib/predict";
+import { lockPrediction, getLockedPredictions, gradeResult, getUngradedPredictions } from "@/lib/db";
 
 // predictions stop updating once a game is within this many minutes of first pitch
 const PREDICTION_LOCK_MINUTES = 5;
@@ -644,15 +644,6 @@ export async function GET() {
       games.map((g) => [g.gamePk, lockedByGamePk[g.gamePk]?.pred_json ?? freshPredByGamePk[g.gamePk]])
     );
 
-    // "推薦" is set manually via the password-protected panel (not auto-picked) — see
-    // /api/admin/recommendations. Empty by default until something's been chosen for the day.
-    let manualRecGamePks = new Set();
-    try {
-      manualRecGamePks = new Set(await getManualRecommendations(etDate));
-    } catch {
-      // DB unreachable — no recommendations shown rather than breaking the page
-    }
-
     await Promise.all(
       games
         .filter((g) => isGameLocked(g) && !lockedByGamePk[g.gamePk])
@@ -667,7 +658,7 @@ export async function GET() {
             homeProb: freshPredByGamePk[g.gamePk].homeProb,
             runsLow: freshPredByGamePk[g.gamePk].runs.low,
             runsHigh: freshPredByGamePk[g.gamePk].runs.high,
-            recommended: manualRecGamePks.has(g.gamePk),
+            recommended: isRecommended(freshPredByGamePk[g.gamePk].homeProb),
             pred: freshPredByGamePk[g.gamePk],
             gameDateIso: g.gameDateIso,
           }).catch(() => {})
@@ -728,7 +719,7 @@ export async function GET() {
     const gamesWithPred = games.map((g) => ({
       ...g,
       pred: predByGamePk[g.gamePk],
-      recommended: lockedByGamePk[g.gamePk]?.recommended ?? manualRecGamePks.has(g.gamePk),
+      recommended: isRecommended(predByGamePk[g.gamePk].homeProb),
     }));
 
     return NextResponse.json({
