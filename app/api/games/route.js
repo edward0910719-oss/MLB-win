@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { TEAM_META } from "@/lib/teamMeta";
 import { predictGame, ouLine, isRecommended } from "@/lib/predict";
+import { computeSeriesProbability } from "@/lib/series";
 import { lockPrediction, getLockedPredictions, gradeResult, getUngradedPredictions } from "@/lib/db";
 
 // predictions stop updating once a game is within this many minutes of first pitch
@@ -325,10 +326,18 @@ export async function GET() {
     // keep the raw injured-player list per team (for the full display list) as well as
     // enough info (id + position) to later work out which injuries are actually significant
     const injuredPlayersByTeam = {};
+    // the same 40-man roster call's full player list, kept for the postseason-eligibility
+    // check below (which players are on the 40-man but not this round's 25-man list)
+    const fortyManRosterByTeam = {};
     await Promise.all(
       [...gameTeamIds].map(async (id) => {
         try {
           const roster = await fetchJson(`${MLB_API}/teams/${id}/roster?rosterType=40Man`);
+          fortyManRosterByTeam[id] = (roster.roster || []).map((p) => ({
+            id: p.person.id,
+            name: p.person.fullName,
+            isPitcher: p.position?.code === "1",
+          }));
           injuredPlayersByTeam[id] = (roster.roster || [])
             .filter((p) => p.status?.code?.startsWith("D"))
             .map((p) => ({
@@ -338,6 +347,7 @@ export async function GET() {
               isPitcher: p.position?.code === "1",
             }));
         } catch {
+          fortyManRosterByTeam[id] = [];
           injuredPlayersByTeam[id] = [];
         }
       })
@@ -347,18 +357,28 @@ export async function GET() {
       injuryMap[id] = players.map((p) => `${p.name}（${p.description}）`);
     }
 
-    // ---- probable pitcher season stats (ERA / WHIP), fetched in one bulk call ----
+    // ---- probable pitcher season stats (ERA / WHIP / start count) plus this season's
+    // game log (to find days since their last appearance), fetched in one bulk call ----
+    const MIN_TRUSTED_GAMES_STARTED = 3; // below this, a starter's own ERA is too small a
+    // sample to trust — fall back to team ERA instead (separate from the existing
+    // SIGNIFICANT_GAMES_STARTED bar below, which judges injury *significance*, not
+    // ERA *trustworthiness*)
     const pitcherStatsMap = {};
     if (pitcherIds.size > 0) {
       const people = await fetchJson(
-        `${MLB_API}/people?personIds=${[...pitcherIds].join(",")}&hydrate=stats(group=[pitching],type=[season],season=${season})`
+        `${MLB_API}/people?personIds=${[...pitcherIds].join(",")}&hydrate=stats(group=[pitching],type=[season,gameLog],season=${season})`
       );
       for (const person of people.people || []) {
-        const split = person.stats?.[0]?.splits?.[0];
-        if (split) {
+        const seasonSplit = person.stats?.find((s) => s.type?.displayName === "season")?.splits?.[0];
+        const gameLogSplits = person.stats?.find((s) => s.type?.displayName === "gameLog")?.splits || [];
+        const lastAppearance = gameLogSplits[gameLogSplits.length - 1]?.date ?? null;
+        if (seasonSplit) {
           pitcherStatsMap[person.id] = {
-            era: parseFloat(split.stat.era),
-            whip: parseFloat(split.stat.whip),
+            era: parseFloat(seasonSplit.stat.era),
+            whip: parseFloat(seasonSplit.stat.whip),
+            gamesStarted: seasonSplit.stat.gamesStarted ?? 0,
+            gamesPitched: seasonSplit.stat.gamesPitched ?? 0,
+            lastAppearance,
           };
         }
       }
@@ -481,8 +501,44 @@ export async function GET() {
       })
     );
 
-    // ---- assemble TEAMS (all 30 clubs, for the standings tab) ----
-    const teams = Object.entries(TEAM_META).map(([idStr, meta]) => {
+    // ---- postseason round detection: are we currently in the postseason, and if so,
+    // which teams are still alive this round? Placeholder "winner of X/Y" bracket slots
+    // use synthetic team ids that aren't in TEAM_META, so filtering to known ids naturally
+    // excludes them without needing to special-case them. Regular-season data for every
+    // other team is left completely untouched — this only affects what gets returned in
+    // the response's `teams` list below, not the DB or TEAM_META themselves. ----
+    let postseasonRoundTeamIds = null; // null = not in postseason mode, show all 30 teams
+    try {
+      const windowEndParam = etDateString(new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000));
+      const psSchedule = await fetchJson(
+        `${MLB_API}/schedule?sportId=1&gameType=F,D,L,W&startDate=${etDate}&endDate=${windowEndParam}`,
+        secondsUntil7pm
+      );
+      const teamIdsByDate = {};
+      for (const day of psSchedule.dates || []) {
+        for (const sg of day.games || []) {
+          const hId = sg.teams.home.team.id;
+          const aId = sg.teams.away.team.id;
+          if (!TEAM_META[hId] || !TEAM_META[aId]) continue; // undetermined bracket slot
+          if (sg.status?.abstractGameState === "Final") continue; // this game already decided
+          if (!teamIdsByDate[day.date]) teamIdsByDate[day.date] = new Set();
+          teamIdsByDate[day.date].add(hId);
+          teamIdsByDate[day.date].add(aId);
+        }
+      }
+      const earliestDate = Object.keys(teamIdsByDate).sort()[0];
+      if (earliestDate) postseasonRoundTeamIds = teamIdsByDate[earliestDate];
+    } catch {
+      // MLB API unreachable for this lookup — fall back to showing all 30 teams
+    }
+
+    // ---- assemble TEAMS: all 30 clubs normally, or (during the postseason) only the
+    // teams still alive in the current round — see postseasonRoundTeamIds above. Every
+    // other team's data stays in TEAM_META/the DB untouched, just not iterated here. ----
+    const teamEntries = postseasonRoundTeamIds
+      ? Object.entries(TEAM_META).filter(([idStr]) => postseasonRoundTeamIds.has(Number(idStr)))
+      : Object.entries(TEAM_META);
+    const teams = teamEntries.map(([idStr, meta]) => {
       const id = Number(idStr);
       const identity = teamIdentity[id] || {};
       const standing = standingsMap[id] || { w: 0, l: 0, rs: 0, ra: 0, last10: "0-0" };
@@ -508,17 +564,58 @@ export async function GET() {
         significantInjuryCount: significantInjuryCountMap[id] ?? 0,
       };
     });
+
+    // ---- postseason roster eligibility: each round requires a (re)submitted 25-man
+    // roster, which can drop players who are on the regular 40-man (e.g. hurt, or just not
+    // included). rosterType=postseason returns MLB's own list once a team's roster is
+    // actually locked for their series — tested ~26 days ahead of the 2026 Wild Card and
+    // it came back 28 players, not 25, confirming rosters aren't finalized this far out, so
+    // this section is explicitly labeled "not yet locked" until the count settles at 25. ----
+    const postseasonRosterNoteByTeam = {};
+    if (postseasonRoundTeamIds) {
+      await Promise.all(
+        [...gameTeamIds].map(async (id) => {
+          try {
+            const roster = await fetchJson(`${MLB_API}/teams/${id}/roster?rosterType=postseason`);
+            const postseasonIds = new Set((roster.roster || []).map((p) => p.person.id));
+            const notEligible = (fortyManRosterByTeam[id] || []).filter((p) => !postseasonIds.has(p.id));
+            postseasonRosterNoteByTeam[id] = {
+              locked: postseasonIds.size === 25,
+              rosterSize: postseasonIds.size,
+              possiblyIneligible: notEligible.map((p) => p.name),
+            };
+          } catch {
+            postseasonRosterNoteByTeam[id] = { locked: false, rosterSize: 0, possiblyIneligible: [] };
+          }
+        })
+      );
+    }
+
+    // best-effort heuristics only — MLB doesn't publish an official "bullpen game" or
+    // "early rotation turn" flag, so these are inferred from public stats and can be wrong
+    // (e.g. a true ace making a normal start still reads as "early turn" if he happened to
+    // pitch on 3 days' rest once in relief during a doubleheader)
+    const EARLY_TURN_MAX_REST_DAYS = 4;
     function buildProbablePitcher(teamId, probablePitcher) {
       const stats = probablePitcher ? pitcherStatsMap[probablePitcher.id] : null;
-      if (probablePitcher && stats) {
-        return { name: shortPitcherName(probablePitcher.fullName), era: stats.era, whip: stats.whip };
+      const daysRest =
+        stats?.lastAppearance != null ? Math.round((now.getTime() - new Date(stats.lastAppearance).getTime()) / 86400000) : null;
+      const isEarlyTurn = daysRest !== null && daysRest < EARLY_TURN_MAX_REST_DAYS;
+
+      if (probablePitcher && stats && stats.gamesStarted >= MIN_TRUSTED_GAMES_STARTED) {
+        const isBullpenGame = stats.gamesPitched > 0 && stats.gamesStarted / stats.gamesPitched < 0.5;
+        return { name: shortPitcherName(probablePitcher.fullName), era: stats.era, whip: stats.whip, isBullpenGame, isEarlyTurn };
       }
-      // fall back to the team's season ERA so the prediction model still has a usable number
+      // no probable pitcher announced, or their own sample is too small to trust (rookie
+      // call-up, emergency starter) — fall back to the team's season ERA so the model still
+      // has a usable number, and treat it as a de facto bullpen game
       const fallbackEra = eraMap[teamId] ?? 4.0;
       return {
         name: probablePitcher ? shortPitcherName(probablePitcher.fullName) : "先發未公布",
         era: fallbackEra,
         whip: 1.3,
+        isBullpenGame: true,
+        isEarlyTurn,
       };
     }
 
@@ -567,10 +664,32 @@ export async function GET() {
           gamePk: g.gamePk,
           home: homeAbbr,
           away: awayAbbr,
+          homeTeamId: homeId,
+          awayTeamId: awayId,
           hp: buildProbablePitcher(homeId, g.teams.home.probablePitcher),
           ap: buildProbablePitcher(awayId, g.teams.away.probablePitcher),
           time: etTimeString(g.gameDate),
           gameDateIso: g.gameDate,
+          gameType: g.gameType,
+          isPostseason: g.gameType !== "R",
+          series:
+            g.gameType !== "R"
+              ? {
+                  description: g.seriesDescription || null,
+                  gameNumber: g.seriesGameNumber ?? null,
+                  gamesInSeries: g.gamesInSeries ?? null,
+                  ifNecessary: g.ifNecessary === "Y",
+                  homeWins: g.teams.home.leagueRecord?.wins ?? 0,
+                  awayWins: g.teams.away.leagueRecord?.wins ?? 0,
+                }
+              : null,
+          postseasonRoster:
+            g.gameType !== "R"
+              ? {
+                  home: postseasonRosterNoteByTeam[homeId] || null,
+                  away: postseasonRosterNoteByTeam[awayId] || null,
+                }
+              : null,
           homeLineupOps: homeLineup.ops,
           awayLineupOps: awayLineup.ops,
           homeLineupConfirmed: homeLineup.confirmed,
@@ -716,10 +835,72 @@ export async function GET() {
       // DB unreachable — skip catch-up grading rather than breaking the page
     }
 
+    // ---- postseason series-advancement probability (separate from, and always fresh
+    // relative to, the locked single-game snapshot — it reflects the CURRENT series score,
+    // which keeps changing as games get played, so freezing it at one game's lock time
+    // would go stale for anyone checking mid-series) ----
+    const seriesProbByGamePk = {};
+    const postseasonGames = games.filter((g) => g.isPostseason);
+    if (postseasonGames.length > 0) {
+      const seriesKeyOf = (g) => `${g.homeTeamId}-${g.awayTeamId}-${g.gameType}`;
+      const uniqueSeries = new Map();
+      for (const g of postseasonGames) uniqueSeries.set(seriesKeyOf(g), g);
+
+      const seriesInfoByKey = {};
+      await Promise.all(
+        [...uniqueSeries.entries()].map(async ([key, g]) => {
+          try {
+            const sched = await fetchJson(
+              `${MLB_API}/schedule?sportId=1&teamId=${g.homeTeamId}&opponentId=${g.awayTeamId}&season=${season}&gameType=${g.gameType}`
+            );
+            const seriesGames = [];
+            for (const day of sched.dates || []) {
+              for (const sg of day.games || []) {
+                const sgHomeAbbr = teamIdentity[sg.teams.home.team.id]?.abbr;
+                const sgAwayAbbr = teamIdentity[sg.teams.away.team.id]?.abbr;
+                if (!sgHomeAbbr || !sgAwayAbbr) continue; // not-yet-determined bracket slot
+                seriesGames.push({
+                  seriesGameNumber: sg.seriesGameNumber ?? 0,
+                  homeAbbr: sgHomeAbbr,
+                  awayAbbr: sgAwayAbbr,
+                  status: sg.status?.abstractGameState,
+                  homeScore: typeof sg.teams.home.score === "number" ? sg.teams.home.score : null,
+                  awayScore: typeof sg.teams.away.score === "number" ? sg.teams.away.score : null,
+                  fullPred: freshPredByGamePk[sg.gamePk] ?? null,
+                });
+              }
+            }
+            seriesGames.sort((a, b) => a.seriesGameNumber - b.seriesGameNumber);
+            seriesInfoByKey[key] = { seriesGames, gamesInSeries: g.series?.gamesInSeries ?? seriesGames.length };
+          } catch {
+            seriesInfoByKey[key] = null;
+          }
+        })
+      );
+
+      for (const g of postseasonGames) {
+        const info = seriesInfoByKey[seriesKeyOf(g)];
+        if (!info) continue;
+        try {
+          const result = computeSeriesProbability({
+            teamAAbbr: g.home,
+            teamBAbbr: g.away,
+            gamesInSeries: info.gamesInSeries,
+            seriesGames: info.seriesGames,
+            teamMap,
+          });
+          seriesProbByGamePk[g.gamePk] = { home: result.probA, away: result.probB, homeWins: result.winsA, awayWins: result.winsB };
+        } catch {
+          // leave unset — UI just won't show the pill for this game rather than breaking the page
+        }
+      }
+    }
+
     const gamesWithPred = games.map((g) => ({
       ...g,
       pred: predByGamePk[g.gamePk],
       recommended: isRecommended(predByGamePk[g.gamePk].homeProb),
+      seriesProb: seriesProbByGamePk[g.gamePk] || null,
     }));
 
     return NextResponse.json({

@@ -338,6 +338,21 @@ function GameDetail({ g, onClose, teamMap }) {
           </span>
         </div>
 
+        {g.series && (
+          <div className="stat-pill-row" style={{ marginTop: "0.5rem" }}>
+            <span className="stat-pill">
+              {g.series.description} {away.zh} {g.series.awayWins}勝 - {g.series.homeWins}勝 {home.zh}（Best-of-{g.series.gamesInSeries}
+              {g.series.ifNecessary ? "・若有必要" : ""}）
+            </span>
+            {g.seriesProb && (
+              <span className="stat-pill">
+                晉級機率 {home.zh} <strong>{Math.round(g.seriesProb.home * 100)}%</strong> ・ {away.zh}{" "}
+                <strong>{Math.round(g.seriesProb.away * 100)}%</strong>
+              </span>
+            )}
+          </div>
+        )}
+
         {g.pred.commentary && <p className="commentary-note">{g.pred.commentary}</p>}
         {g.pred.ouCommentary && <p className="commentary-note">{g.pred.ouCommentary}</p>}
 
@@ -376,6 +391,28 @@ function GameDetail({ g, onClose, teamMap }) {
             <h4 className="factor-heading">傷兵名單備註</h4>
             {home.injuries.map((t, i) => <p key={"h" + i}>⚠ {home.zh}：{t}</p>)}
             {away.injuries.map((t, i) => <p key={"a" + i}>⚠ {away.zh}：{t}</p>)}
+          </div>
+        )}
+
+        {g.postseasonRoster && (
+          <div className="injury-box">
+            <h4 className="factor-heading">季後賽25人名單提醒</h4>
+            {[
+              { team: home, roster: g.postseasonRoster.home, key: "h" },
+              { team: away, roster: g.postseasonRoster.away, key: "a" },
+            ].map(({ team, roster, key }) => {
+              if (!roster) return null;
+              if (!roster.locked) {
+                return (
+                  <p key={key}>
+                    ⚠ {team.zh}：季後賽名單尚未正式鎖定（目前查到{roster.rosterSize}人，非25人），以下僅供參考，開賽前請再次確認
+                  </p>
+                );
+              }
+              return roster.possiblyIneligible.map((name, i) => (
+                <p key={key + i}>⚠ {team.zh}：{name} 不在本輪季後賽25人名單，可能無法上場</p>
+              ));
+            })}
           </div>
         )}
       </div>
